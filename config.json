@@ -23,7 +23,7 @@
   "coastline_mask": {
     "enabled": true,
     "source": "osm_land_polygons",
-    "osm_land_polygons_url": "https://osmdata.openstreetmap.de/data/land-polygons-split-4326.zip",
+    "osm_land_polygons_url": "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip",
     "emodnet_vector_url": "",
     "emodnet_vector_layer": null,
     "max_features": null
