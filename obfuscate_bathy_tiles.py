@@ -1036,16 +1036,31 @@ def make_bathy_payload_feature_embedded(src: rasterio.DatasetReader, tb_merc: Tu
 # Raster tiles: bathy + derived rasters (PNG8)
 # -----------------------------
 def encode_png8(data: np.ndarray, valid: np.ndarray, vmin: float, vmax: float) -> bytes:
+    # Ensure Pillow is available before attempting to encode raster tiles.
     if not PIL_OK:
+        # Fail fast with a clear error message when Pillow is missing.
         raise RuntimeError("Pillow required for raster MBTiles outputs")
+    # Guard against invalid or degenerate ranges by falling back to a safe default.
     if not math.isfinite(vmin) or not math.isfinite(vmax) or vmin == vmax:
+        # Use a symmetric range to avoid division by zero or infinities.
         vmin, vmax = -1.0, 1.0
-    norm = np.clip((data - vmin) / (vmax - vmin), 0.0, 1.0)
+    # Normalize the data into a 0-1 range so it can map into 8-bit values.
+    norm = (data - vmin) / (vmax - vmin)
+    # Replace NaNs/Infs with finite defaults before clipping.
+    norm = np.nan_to_num(norm, nan=0.0, posinf=1.0, neginf=0.0)
+    # Clamp the normalized values to the expected 0-1 range.
+    norm = np.clip(norm, 0.0, 1.0)
+    # Scale normalized values to 8-bit and cast safely.
     img = (norm * 255.0).astype(np.uint8)
+    # Set invalid pixels to zero to keep output deterministic.
     img[~valid] = 0
+    # Build a grayscale image from the 8-bit array.
     im = Image.fromarray(img, mode="L")
+    # Write the PNG to an in-memory buffer for MBTiles storage.
     buf = io.BytesIO()
+    # Save with PNG optimization enabled to reduce tile size.
     im.save(buf, format="PNG", optimize=True)
+    # Return the encoded PNG bytes.
     return buf.getvalue()
 
 def hillshade_and_slope(z_arr: np.ndarray, valid: np.ndarray, pixel_size_m: float,
