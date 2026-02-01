@@ -48,6 +48,7 @@ import sqlite3  # MBTiles storage via SQLite.
 import sys  # CLI entrypoint arguments.
 import time  # Runtime timing utilities.
 import zipfile  # ZIP archive handling for downloads.
+from urllib.parse import urlparse, urlunparse  # URL parsing helpers for CSW endpoints.
 import zlib  # Compression helpers for vector tiles.
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -90,6 +91,12 @@ logger = logging.getLogger(__name__)  # Module-level logger instance.
 # -----------------------------
 # Helpers: zoom-range dictionaries
 # -----------------------------
+def configure_logging(verbose: bool) -> None:  # Update logging verbosity from CLI flag.
+    level = logging.DEBUG if verbose else logging.INFO  # Select log level based on flag.
+    logging.getLogger().setLevel(level)  # Apply level to root logger.
+    if verbose:  # Emit confirmation when verbose logging is enabled.
+        logger.debug("Verbose logging enabled.")  # Log debug-only confirmation.
+
 def _parse_zoom_key(key: str) -> Tuple[int, int]:
     key = key.strip()
     if "-" in key:
@@ -205,6 +212,38 @@ CSW_GETRECORDS_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 </csw:GetRecords>
 """
 
+CSW_GETRECORDS_TEMPLATE_NO_BBOX = """<?xml version="1.0" encoding="UTF-8"?>  # Template without spatial filters.
+<csw:GetRecords
+  xmlns:csw="http://www.opengis.net/cat/csw/2.0.2"
+  xmlns:ogc="http://www.opengis.net/ogc"
+  service="CSW"
+  version="2.0.2"
+  resultType="results"
+  startPosition="{start}"
+  maxRecords="{max_records}"
+  outputSchema="http://www.isotc211.org/2005/gmd"
+  outputFormat="application/xml">
+  <csw:Query typeNames="csw:Record">
+    <csw:ElementSetName>full</csw:ElementSetName>
+    <csw:Constraint version="1.1.0">
+      <ogc:Filter>
+        <ogc:PropertyIsLike wildCard="*" singleChar="?" escapeChar="\">
+          <ogc:PropertyName>AnyText</ogc:PropertyName>
+          <ogc:Literal>{text_query}</ogc:Literal>
+        </ogc:PropertyIsLike>
+      </ogc:Filter>
+    </csw:Constraint>
+  </csw:Query>
+</csw:GetRecords>
+"""
+
+def normalize_csw_url(raw_url: str) -> str:  # Ensure CSW endpoint is usable for POST.
+    parsed = urlparse(raw_url)  # Parse URL into components.
+    if not parsed.query:  # Return early when no query string exists.
+        return raw_url  # Preserve the original URL when already clean.
+    stripped = parsed._replace(query="", fragment="")  # Remove query/fragment params.
+    return urlunparse(stripped)  # Rebuild URL without GetCapabilities parameters.
+
 def csw_search_tiles(  # Discover DTM tile URLs from CSW.
     csw_url: str,  # CSW endpoint URL.
     bbox_lonlat: Tuple[float, float, float, float],  # Query bounding box.
@@ -216,6 +255,10 @@ def csw_search_tiles(  # Discover DTM tile URLs from CSW.
     seen: set[str] = set()  # Track unique URLs.
     out: List[str] = []  # Collected output URLs.
     url_re = re.compile(r"https?://[^\s\"<]+")  # Extract all URLs from XML.
+    clean_csw_url = normalize_csw_url(csw_url)  # Drop GetCapabilities query params.
+    if clean_csw_url != csw_url:  # Log when URL normalization occurs.
+        logger.info("Normalized CSW URL to %s", clean_csw_url)  # Inform about URL change.
+    logger.debug("CSW search bbox=%s year=%s", bbox_lonlat, year)  # Verbose query context.
     text_queries = [  # Build query variants to improve robustness.
         f"*EMODnet Digital Bathymetry (DTM {year}) - Tile*",  # Preferred title for year.
         "*EMODnet Digital Bathymetry*Tile*",  # Fallback title without year.
@@ -232,12 +275,13 @@ def csw_search_tiles(  # Discover DTM tile URLs from CSW.
             return False  # Reject URLs that do not include year.
         return True  # URL passes filters.
 
-    def _query_csw(text_query: str, require_year: bool) -> None:  # Execute one CSW query.
+    def _query_csw(text_query: str, require_year: bool, include_bbox: bool) -> None:  # Execute one CSW query.
         nonlocal out, seen  # Use outer-scope collections.
         start, max_records = 1, 50  # Initialize pagination state.
         headers = {"Content-Type": "application/xml"}  # CSW POST headers.
+        template = CSW_GETRECORDS_TEMPLATE if include_bbox else CSW_GETRECORDS_TEMPLATE_NO_BBOX  # Choose template.
         for _ in range(max_pages):  # Loop through result pages.
-            body = CSW_GETRECORDS_TEMPLATE.format(  # Fill template for request.
+            body = template.format(  # Fill template for request.
                 start=start,  # Current start position.
                 max_records=max_records,  # Page size.
                 text_query=text_query,  # Text search query.
@@ -246,15 +290,18 @@ def csw_search_tiles(  # Discover DTM tile URLs from CSW.
                 maxx=maxx,  # BBOX max longitude.
                 maxy=maxy,  # BBOX max latitude.
             )  # End template formatting.
+            logger.debug("CSW query=%s bbox=%s start=%s", text_query, include_bbox, start)  # Verbose query log.
             response = requests.post(  # Execute CSW POST request.
-                csw_url,  # Endpoint URL.
+                clean_csw_url,  # Endpoint URL.
                 data=body.encode("utf-8"),  # Encode XML payload.
                 headers=headers,  # Apply headers.
                 timeout=timeout_s,  # Enforce timeout.
             )  # End request call.
             response.raise_for_status()  # Raise on HTTP errors.
             xml = response.text  # Store response text.
+            logger.debug("CSW response chars=%s", len(xml))  # Verbose response size log.
             found_urls = url_re.findall(xml)  # Extract all URLs from XML.
+            logger.debug("CSW extracted urls=%s", len(found_urls))  # Verbose URL extraction log.
             matched = False  # Track if any URL matched filters.
             for url in found_urls:  # Iterate candidate URLs.
                 if not _is_candidate_url(url, require_year):  # Skip non-matching URLs.
@@ -264,18 +311,25 @@ def csw_search_tiles(  # Discover DTM tile URLs from CSW.
                 seen.add(url)  # Record unique URL.
                 out.append(url)  # Append to output list.
                 matched = True  # Mark that we found matches in this page.
+                logger.debug("CSW matched url=%s", url)  # Verbose matched URL log.
             if 'nextRecord="0"' in xml or 'numberOfRecordsReturned="0"' in xml:  # End paging.
                 break  # Stop paging loop.
             if not matched and start > 1:  # Stop early if subsequent pages empty.
                 break  # Avoid unnecessary requests.
             start += max_records  # Move to next page.
 
-    _query_csw(text_queries[0], require_year=True)  # Prefer strict year match.
+    _query_csw(text_queries[0], require_year=True, include_bbox=True)  # Prefer strict year match.
     if not out:  # Only retry if no URLs were found.
         for fallback_query in text_queries[1:]:  # Iterate fallback queries.
-            _query_csw(fallback_query, require_year=False)  # Loosen filters.
+            _query_csw(fallback_query, require_year=False, include_bbox=True)  # Loosen filters.
             if out:  # Stop once URLs are found.
                 break  # Exit fallback loop.
+    if not out:  # Retry without BBOX if spatial filters are too strict.
+        logger.warning("No URLs with BBOX filter; retrying without spatial filter.")  # Warn about fallback.
+        for fallback_query in text_queries:  # Retry all queries without BBOX.
+            _query_csw(fallback_query, require_year=False, include_bbox=False)  # Query without bbox filter.
+            if out:  # Stop once URLs are found.
+                break  # Exit no-bbox fallback loop.
     return out  # Return collected URLs.
 
 
@@ -825,7 +879,7 @@ def load_config(path: str) -> Config:
 
     return Config(
         dtm_year=int(raw.get("dtm_year", 2024)),
-        csw_url=str(raw.get("csw_url", "https://emodnet.ec.europa.eu/geonetwork/emodnet/eng/csw")),
+        csw_url=str(raw.get("csw_url", "https://emodnet.ec.europa.eu/geonetwork/srv/eng/csw")),
 
         output_mbtiles=req("output_mbtiles"),
         cache_dir=str(raw.get("cache_dir", "./cache")),
@@ -1216,6 +1270,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--zoom-min", type=int, default=None)
     p.add_argument("--zoom-max", type=int, default=None)
     p.add_argument("--bbox", type=float, nargs=4, default=None, metavar=("MINLON", "MINLAT", "MAXLON", "MAXLAT"))
+    p.add_argument("--verbose", action="store_true", help="Enable debug logging for CSW discovery and processing.")  # Toggle DEBUG logs.
     p.add_argument("--no-obfuscation", action="store_true")
     p.add_argument("--vector-mbtiles", default=None, help="Override output vector MBTiles path")
     p.add_argument("--bathy-output", default=None, choices=["none", "embedded_mvt", "raster_mbtiles"], help="Override bathy output strategy")
@@ -1227,6 +1282,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv[1:])
+    configure_logging(args.verbose)  # Apply CLI-configured verbosity before work.
     cfg = load_config(args.config)
     cfg = apply_cli_overrides(cfg, args)
     run(cfg)

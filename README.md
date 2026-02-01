@@ -22,6 +22,7 @@ The output is suitable for:
 ```bash
 python obfuscate_bathy_tiles.py config.json
 ```
+Add `--verbose` to include CSW discovery details in the logs.
 
 2) Serve tiles locally and run demos:
 ```bash
