@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import mercantile
+import netCDF4  # NetCDF reader for HDF5-backed datasets.
 import numpy as np
 import requests
 import rasterio
@@ -86,6 +87,9 @@ logging.basicConfig(  # Configure root logger for consistent output.
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",  # Add timestamps.
 )  # Close logging configuration call.
 logger = logging.getLogger(__name__)  # Module-level logger instance.
+
+SUPPORTED_RASTER_EXTS = (".tif", ".tiff", ".asc", ".nc", ".nc4", ".h5", ".hdf5")  # Supported raster file extensions.
+NETCDF_EXTS = (".nc", ".nc4", ".h5", ".hdf5")  # Recognize NetCDF/HDF5 extensions.
 
 
 # -----------------------------
@@ -265,10 +269,10 @@ def csw_search_tiles(  # Discover DTM tile URLs from CSW.
         "*EMODnet Digital Bathymetry*",  # Broad fallback if titles changed.
     ]  # End query list.
 
-    def _is_candidate_url(url: str, require_year: bool) -> bool:  # Filter for DTM zip URLs.
+    def _is_candidate_url(url: str, require_year: bool) -> bool:  # Filter for DTM raster URLs.
         url_lower = url.lower()  # Normalize for comparisons.
-        if not url_lower.endswith(".zip"):  # Require zip archives for download/extract.
-            return False  # Reject non-zip URLs.
+        if not url_lower.endswith((".zip",) + SUPPORTED_RASTER_EXTS):  # Require supported raster or archive types.
+            return False  # Reject unsupported URLs.
         if "emodnet-bathymetry" not in url_lower:  # Ensure EMODnet host is used.
             return False  # Reject non-EMODnet URLs.
         if require_year and str(year) not in url_lower:  # Enforce year tag when required.
@@ -347,6 +351,112 @@ def download_file(url: str, out_path: str, timeout_s: int = 300) -> None:
                 if chunk:
                     f.write(chunk)
 
+def _select_coord_variable(ds: netCDF4.Dataset, candidates: Tuple[str, ...], standard_name: str) -> Optional[str]:
+    for name, var in ds.variables.items():  # Iterate NetCDF variables to locate coordinate axis names.
+        if name in candidates:  # Match common coordinate variable names first.
+            return name  # Return the first matched candidate name.
+        if getattr(var, "standard_name", None) == standard_name:  # Match on CF standard_name metadata.
+            return name  # Return the name matching the standard_name hint.
+    return None  # Return None when no coordinate variable matches.
+
+def _select_data_variable(ds: netCDF4.Dataset, lat_name: str, lon_name: str) -> str:
+    preferred = ("elevation", "depth", "z", "bathymetry")  # Define preferred data variable names for bathymetry.
+    for name in preferred:  # Check preferred names first for predictable output.
+        var = ds.variables.get(name)  # Fetch the variable by name if it exists.
+        if var is not None and var.ndim == 2 and lat_name in var.dimensions and lon_name in var.dimensions:  # Validate shape and dims.
+            return name  # Return the first preferred variable that matches.
+    for name, var in ds.variables.items():  # Fall back to scanning all variables for a 2D lat/lon grid.
+        if var.ndim != 2:  # Skip variables that are not 2D raster grids.
+            continue  # Continue to the next candidate variable.
+        if lat_name in var.dimensions and lon_name in var.dimensions:  # Ensure both axes are present in dims.
+            return name  # Return the first matching 2D variable.
+    raise ValueError("No suitable 2D data variable found in NetCDF dataset.")  # Error when no valid data variable is found.
+
+def convert_netcdf_to_geotiff(nc_path: str, out_dir: str) -> str:
+    os.makedirs(out_dir, exist_ok=True)  # Ensure output directory exists for converted GeoTIFFs.
+    base = os.path.splitext(os.path.basename(nc_path))[0]  # Derive base filename for output naming.
+    out_tif = os.path.join(out_dir, f"{base}.tif")  # Build target GeoTIFF path.
+    if os.path.exists(out_tif):  # Skip conversion if output already exists.
+        return out_tif  # Return cached GeoTIFF path.
+    logger.info("Converting NetCDF/HDF5 to GeoTIFF: %s", nc_path)  # Log conversion action.
+    with netCDF4.Dataset(nc_path) as ds:  # Open the NetCDF dataset for reading.
+        lat_name = _select_coord_variable(ds, ("lat", "latitude", "y"), "latitude")  # Resolve latitude variable name.
+        lon_name = _select_coord_variable(ds, ("lon", "longitude", "x"), "longitude")  # Resolve longitude variable name.
+        if lat_name is None or lon_name is None:  # Guard against missing coordinate variables.
+            raise ValueError("NetCDF dataset missing lat/lon coordinate variables.")  # Raise when coordinates are absent.
+        data_name = _select_data_variable(ds, lat_name, lon_name)  # Resolve bathymetry data variable name.
+        lat = np.asarray(ds.variables[lat_name][:])  # Load latitude coordinate array.
+        lon = np.asarray(ds.variables[lon_name][:])  # Load longitude coordinate array.
+        data_var = ds.variables[data_name]  # Reference the bathymetry variable.
+        data_raw = data_var[:]  # Read the raw data values.
+        fill_value = getattr(data_var, "_FillValue", None)  # Capture explicit fill value if provided.
+        if np.ma.isMaskedArray(data_raw):  # Handle masked arrays by filling missing values.
+            fill = fill_value if fill_value is not None else np.nan  # Choose fill value or NaN for floats.
+            data_raw = np.ma.filled(data_raw, fill)  # Fill masked cells with the nodata value.
+        data = np.asarray(data_raw, dtype=np.float32)  # Normalize data to float32 for raster output.
+        lat_index = data_var.dimensions.index(lat_name)  # Capture latitude axis index.
+        lon_index = data_var.dimensions.index(lon_name)  # Capture longitude axis index.
+        if (lat_index, lon_index) == (1, 0):  # Detect transposed arrays (lon, lat).
+            data = data.T  # Transpose to lat, lon order.
+        elif (lat_index, lon_index) != (0, 1):  # Reject unexpected dimension ordering.
+            raise ValueError("Unexpected NetCDF data variable dimension order.")  # Fail fast when dims are irregular.
+        if lat[0] < lat[-1]:  # Flip data when latitude increases northward (south-to-north rows).
+            data = np.flipud(data)  # Flip rows to make north-up order.
+            lat = lat[::-1]  # Reverse latitude axis to match flipped data.
+        if lon[0] > lon[-1]:  # Flip data when longitude decreases eastward.
+            data = np.fliplr(data)  # Flip columns to make west-to-east order.
+            lon = lon[::-1]  # Reverse longitude axis to match flipped data.
+        lon_res = float(np.median(np.diff(lon)))  # Compute median longitude spacing.
+        lat_res = float(np.median(np.diff(lat)))  # Compute median latitude spacing.
+        lon_step = abs(lon_res)  # Use absolute longitude step for bounds expansion.
+        lat_step = abs(lat_res)  # Use absolute latitude step for bounds expansion.
+        left = float(np.min(lon) - lon_step / 2.0)  # Compute left bound including half-cell padding.
+        right = float(np.max(lon) + lon_step / 2.0)  # Compute right bound including half-cell padding.
+        bottom = float(np.min(lat) - lat_step / 2.0)  # Compute bottom bound including half-cell padding.
+        top = float(np.max(lat) + lat_step / 2.0)  # Compute top bound including half-cell padding.
+        transform = from_bounds(left, bottom, right, top, width=data.shape[1], height=data.shape[0])  # Build GeoTIFF transform.
+        nodata = fill_value if fill_value is not None else (np.nan if np.issubdtype(data.dtype, np.floating) else None)  # Determine nodata.
+        blockx = min(256, data.shape[1])  # Cap block width to raster width.
+        blocky = min(256, data.shape[0])  # Cap block height to raster height.
+        profile = {  # Build the GeoTIFF profile metadata.
+            "driver": "GTiff",  # Output GeoTIFF driver.
+            "height": data.shape[0],  # Output raster height.
+            "width": data.shape[1],  # Output raster width.
+            "count": 1,  # Single-band raster.
+            "dtype": data.dtype,  # Preserve float32 dtype.
+            "crs": "EPSG:4326",  # Use geographic CRS for lon/lat grids.
+            "transform": transform,  # Apply computed transform.
+            "nodata": nodata,  # Set nodata for masked cells.
+            "compress": "DEFLATE",  # Compress output GeoTIFF.
+            "predictor": 2,  # Enable horizontal differencing for float compression.
+            "tiled": True,  # Write tiled GeoTIFF blocks.
+            "blockxsize": blockx,  # Tile width.
+            "blockysize": blocky,  # Tile height.
+        }  # Close profile definition.
+        with rasterio.open(out_tif, "w", **profile) as dst:  # Create GeoTIFF file on disk.
+            dst.write(data, 1)  # Write the raster data to band 1.
+    return out_tif  # Return the converted GeoTIFF path.
+
+def prepare_raster_file(path: str, out_dir: str) -> Optional[str]:
+    ext = os.path.splitext(path)[1].lower()  # Determine raster file extension.
+    if ext in (".tif", ".tiff"):  # Fast-path GeoTIFFs that need no conversion.
+        return path  # Return the GeoTIFF path as-is.
+    if ext == ".asc":  # Convert ESRI ASCII grid to GeoTIFF.
+        out_tif = os.path.splitext(path)[0] + ".tif"  # Compute output GeoTIFF path.
+        if not os.path.exists(out_tif):  # Only convert if output is missing.
+            logger.info("Converting ASCII grid to GeoTIFF: %s", path)  # Log conversion step.
+            with rasterio.open(path) as src:  # Open ASCII grid with rasterio.
+                profile = src.profile  # Read the source profile.
+                profile.update(driver="GTiff")  # Update driver to GeoTIFF.
+                with rasterio.open(out_tif, "w", **profile) as dst:  # Create GeoTIFF output file.
+                    for band_index in range(1, src.count + 1):  # Iterate over raster bands.
+                        dst.write(src.read(band_index), band_index)  # Copy each band to output.
+        return out_tif  # Return converted GeoTIFF path.
+    if ext in NETCDF_EXTS:  # Convert NetCDF/HDF5 files to GeoTIFF.
+        return convert_netcdf_to_geotiff(path, out_dir)  # Delegate to NetCDF conversion helper.
+    logger.warning("Skipping unsupported raster file: %s", path)  # Warn about unsupported raster formats.
+    return None  # Indicate that the raster file could not be prepared.
+
 def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> Optional[str]:
     os.makedirs(out_dir, exist_ok=True)  # Ensure the output directory exists.
     local_zip = os.path.join(out_dir, os.path.basename(url.split("?", 1)[0]))  # Build the local zip path.
@@ -364,30 +474,32 @@ def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> Op
                     shutil.move(extracted, out_tif)  # Move the extracted file to the final location.
             return out_tif  # Return the GeoTIFF path.
         asc_members = [m for m in z.namelist() if m.lower().endswith(".asc")]  # Look for ASCII grid entries.
-        if not asc_members:  # Handle archives without raster data (e.g., EMODnet .emo metadata).
+        nc_members = [m for m in z.namelist() if m.lower().endswith(NETCDF_EXTS)]  # Look for NetCDF/HDF5 entries.
+        if not asc_members and not nc_members:  # Handle archives without raster data (e.g., EMODnet .emo metadata).
             logger.warning(  # Log that we are skipping an unsupported archive.
-                "Skipping unsupported archive (no GeoTIFF/ASC): %s",
-                local_zip,
+                "Skipping unsupported archive (no GeoTIFF/ASC/NetCDF): %s",  # Explain missing raster types.
+                local_zip,  # Include the local zip path in the warning.
             )
             return None  # Skip unsupported content gracefully.
-        asc_member = asc_members[0]  # Select the first ASCII grid entry.
-        out_asc = os.path.join(out_dir, os.path.basename(asc_member))  # Build the output ASCII grid path.
-        if not os.path.exists(out_asc):  # Extract only if missing.
-            z.extract(asc_member, out_dir)  # Extract the ASCII grid file.
-            extracted = os.path.join(out_dir, asc_member)  # Build the extracted ASCII grid path.
-            if extracted != out_asc:  # Move when nested directories are used.
-                os.makedirs(os.path.dirname(out_asc), exist_ok=True)  # Ensure the destination folder exists.
-                shutil.move(extracted, out_asc)  # Move the extracted file to the final location.
-        out_tif = os.path.splitext(out_asc)[0] + ".tif"  # Define the converted GeoTIFF path.
-        if not os.path.exists(out_tif):  # Convert only if the GeoTIFF does not exist.
-            logger.info("Converting ASCII grid to GeoTIFF: %s", out_asc)  # Log the conversion step.
-            with rasterio.open(out_asc) as src:  # Open the ASCII grid with rasterio.
-                profile = src.profile  # Capture the source profile metadata.
-                profile.update(driver="GTiff")  # Switch the output driver to GeoTIFF.
-                with rasterio.open(out_tif, "w", **profile) as dst:  # Create the GeoTIFF dataset.
-                    for band_index in range(1, src.count + 1):  # Iterate over all bands.
-                        dst.write(src.read(band_index), band_index)  # Copy the band data.
-        return out_tif  # Return the converted GeoTIFF path.
+        raster_member = (asc_members or nc_members)[0]  # Choose the first available raster entry.
+        out_raster = os.path.join(out_dir, os.path.basename(raster_member))  # Build the output raster path.
+        if not os.path.exists(out_raster):  # Extract only if missing.
+            z.extract(raster_member, out_dir)  # Extract the raster file.
+            extracted = os.path.join(out_dir, raster_member)  # Build the extracted raster file path.
+            if extracted != out_raster:  # Move when nested directories are used.
+                os.makedirs(os.path.dirname(out_raster), exist_ok=True)  # Ensure the destination folder exists.
+                shutil.move(extracted, out_raster)  # Move the extracted file to the final location.
+        return prepare_raster_file(out_raster, out_dir)  # Convert the raster to GeoTIFF if needed.
+
+def download_and_prepare_raster(url: str, out_dir: str, timeout_s: int = 300) -> Optional[str]:
+    os.makedirs(out_dir, exist_ok=True)  # Ensure output directory exists for downloads.
+    raw_name = os.path.basename(url.split("?", 1)[0])  # Extract filename without query params.
+    ext = os.path.splitext(raw_name)[1].lower()  # Detect file extension for routing.
+    if ext == ".zip":  # Delegate to zip extractor for archive downloads.
+        return download_and_extract_zip(url, out_dir, timeout_s=timeout_s)  # Extract and prepare raster from zip.
+    local_path = os.path.join(out_dir, raw_name)  # Build the local file path for direct downloads.
+    download_file(url, local_path, timeout_s=timeout_s)  # Download the file if needed.
+    return prepare_raster_file(local_path, out_dir)  # Prepare the raster file for mosaicking.
 
 def download_and_prepare_vector_dataset(url: str, cache_dir: str) -> str:
     os.makedirs(cache_dir, exist_ok=True)
@@ -1018,7 +1130,7 @@ def run(cfg: Config) -> None:
     tile_tifs: List[str] = []  # Track downloaded raster tiles.
     for u in tile_urls:  # Iterate over discovered tile URLs.
         logger.info("Downloading/extracting: %s", u)  # Log download URL.
-        tile_path = download_and_extract_zip(u, tiles_dir)  # Download and extract raster content if present.
+        tile_path = download_and_prepare_raster(u, tiles_dir)  # Download and prepare raster content if present.
         if tile_path is not None:  # Only keep raster outputs.
             tile_tifs.append(tile_path)  # Store the tile path for later mosaicking.
 

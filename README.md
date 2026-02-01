@@ -9,6 +9,8 @@ The output is suitable for:
 - local MBTiles workflows
 - integration as a chart/map resource in Signal K ecosystems
 
+Supported EMODnet DTM tile inputs include GeoTIFF, ASCII grid, and NetCDF/HDF5 rasters (for example `F6_2024.nc`). 
+
 ## What you generate
 - `data/output/bathy_contours.mbtiles` – vector tiles (MVT/PBF)
 - `data/output/bathy_raster.mbtiles` – bathymetry raster tiles (PNG8) *(optional)*

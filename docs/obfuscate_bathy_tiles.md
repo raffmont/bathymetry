@@ -7,6 +7,7 @@ from EMODnet Bathymetry DTM datasets.
 - Automatic EMODnet DTM discovery & download
 - On-the-fly raster mosaicking
 - Per-zoom raster cache
+- GeoTIFF, ASCII grid, and NetCDF/HDF5 raster ingestion
 - Coastline masking (OSM or EMODnet)
 - Vector contours (MVT)
 - Raster bathymetry (PNG MBTiles)
