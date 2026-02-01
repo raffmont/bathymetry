@@ -35,6 +35,7 @@
   import MVT from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/format/MVT.js';
   import Stroke from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/style/Stroke.js';
   import Style from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/style/Style.js';
+  import { transformExtent } from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/proj.js';
 
   const base = `${window.location.origin}/tiles`;
 
@@ -56,10 +57,12 @@
     { id: "slope", label: "Slope (raster)", healthKey: "slope_exists", layer: slope }
   ];
 
+  const view = new View({ center: [0, 0], zoom: 2, projection: 'EPSG:3857' });
+
   const map = new Map({
     target: 'map',
     layers: [osm, bathy, hillshade, slope, contours],
-    view: new View({ center: [1580000, 4870000], zoom: 10, projection: 'EPSG:3857' })
+    view
   });
 
   const statusList = document.getElementById("layer-status");
@@ -106,6 +109,21 @@
         option.textContent = "No overlay layers available";
         select.appendChild(option);
         select.disabled = true;
+      }
+
+      if (health.tilejson_exists) {
+        fetch(`${window.location.origin}/tilejson/bathy_contours.tilejson`)
+          .then((resp) => resp.ok ? resp.json() : null)
+          .then((tilejson) => {
+            if (!tilejson || !tilejson.bounds) {
+              return;
+            }
+            const extent = transformExtent(tilejson.bounds, "EPSG:4326", "EPSG:3857");
+            view.setMinZoom(tilejson.minzoom ?? view.getMinZoom());
+            view.setMaxZoom(tilejson.maxzoom ?? view.getMaxZoom());
+            view.fit(extent, { padding: [40, 40, 40, 40], maxZoom: tilejson.maxzoom ?? 14 });
+          })
+          .catch(() => undefined);
       }
     })
     .catch(() => {

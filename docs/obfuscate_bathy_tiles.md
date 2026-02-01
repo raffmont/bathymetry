@@ -81,6 +81,10 @@ python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbo
 ```
 Use `--verbose` to log CSW query details when troubleshooting tile discovery.
 
+### Zoom defaults
+- If `zoom_min` is omitted, the generator defaults to `0`.
+- If `zoom_max` is omitted, the generator derives it from the finest (smallest) DTM resolution across the downloaded tiles.
+
 ### contour_labels
 Add a formatted label attribute to contour line features:
 ```json
