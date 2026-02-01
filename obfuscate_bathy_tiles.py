@@ -663,6 +663,12 @@ def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]: 
         raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
     for path in tile_tifs:  # Iterate through each tile path to open datasets.
         src = rasterio.open(path)  # Open the raster dataset from disk.
+        if src.count > 1:  # Detect multi-band rasters that could break merge assumptions.
+            logger.warning(  # Emit a warning when extra bands are present.
+                "Using only the first band from %s (%s bands detected).",  # Explain the band selection decision.
+                path,  # Include the dataset path in the warning.
+                src.count,  # Report the number of detected bands.
+            )
         src_crs = src.crs  # Capture the CRS from metadata when available.
         if src_crs is None:  # Guard against missing CRS metadata.
             src_crs = _read_sidecar_crs(path)  # Attempt to load CRS from a sidecar file.
@@ -692,7 +698,7 @@ def ensure_zoom_intermediate(cfg, tile_tifs: List[str], z: int, bbox_merc: Tuple
 
     srcs = build_mosaic_sources(tile_tifs)
     try:
-        mosaic, mosaic_transform = rio_merge(srcs)
+        mosaic, mosaic_transform = rio_merge(srcs, indexes=1)  # Merge using only the first band across inputs.
         data = mosaic[0]
         src_crs = srcs[0].crs
         nodata = srcs[0].nodata

@@ -8,6 +8,7 @@ from EMODnet Bathymetry DTM datasets.
 - On-the-fly raster mosaicking (auto-reprojects mismatched CRS tiles to a common CRS)
 - Per-zoom raster cache
 - GeoTIFF, ASCII grid, and NetCDF/HDF5 raster ingestion
+- Multi-band rasters are ingested using the first band only
 - Coastline masking (OSM or EMODnet)
 - Vector contours (MVT)
 - Raster bathymetry (PNG MBTiles)
