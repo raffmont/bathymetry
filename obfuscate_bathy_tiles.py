@@ -347,7 +347,7 @@ def download_file(url: str, out_path: str, timeout_s: int = 300) -> None:
                 if chunk:
                     f.write(chunk)
 
-def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> str:
+def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> Optional[str]:
     os.makedirs(out_dir, exist_ok=True)  # Ensure the output directory exists.
     local_zip = os.path.join(out_dir, os.path.basename(url.split("?", 1)[0]))  # Build the local zip path.
     download_file(url, local_zip, timeout_s=timeout_s)  # Download the zip archive if needed.
@@ -364,8 +364,12 @@ def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> st
                     shutil.move(extracted, out_tif)  # Move the extracted file to the final location.
             return out_tif  # Return the GeoTIFF path.
         asc_members = [m for m in z.namelist() if m.lower().endswith(".asc")]  # Look for ASCII grid entries.
-        if not asc_members:  # Fail if neither GeoTIFF nor ASCII grid exists.
-            raise RuntimeError(f"No GeoTIFF or ASCII grid in {local_zip}")  # Surface the unsupported archive.
+        if not asc_members:  # Handle archives without raster data (e.g., EMODnet .emo metadata).
+            logger.warning(  # Log that we are skipping an unsupported archive.
+                "Skipping unsupported archive (no GeoTIFF/ASC): %s",
+                local_zip,
+            )
+            return None  # Skip unsupported content gracefully.
         asc_member = asc_members[0]  # Select the first ASCII grid entry.
         out_asc = os.path.join(out_dir, os.path.basename(asc_member))  # Build the output ASCII grid path.
         if not os.path.exists(out_asc):  # Extract only if missing.
@@ -1011,10 +1015,12 @@ def run(cfg: Config) -> None:
 
     tiles_dir = os.path.join(cfg.cache_dir, "tiles", f"dtm_{cfg.dtm_year}")
     os.makedirs(tiles_dir, exist_ok=True)
-    tile_tifs: List[str] = []
-    for u in tile_urls:
+    tile_tifs: List[str] = []  # Track downloaded raster tiles.
+    for u in tile_urls:  # Iterate over discovered tile URLs.
         logger.info("Downloading/extracting: %s", u)  # Log download URL.
-        tile_tifs.append(download_and_extract_zip(u, tiles_dir))
+        tile_path = download_and_extract_zip(u, tiles_dir)  # Download and extract raster content if present.
+        if tile_path is not None:  # Only keep raster outputs.
+            tile_tifs.append(tile_path)  # Store the tile path for later mosaicking.
 
     land_tree, land_geoms = load_land_polygons(cfg, cfg.bbox_lonlat) if cfg.coast_enabled else (STRtree([]), [])
     if cfg.coast_enabled:
