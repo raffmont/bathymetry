@@ -34,20 +34,21 @@ Notes
 
 from __future__ import annotations
 
-import argparse
-import base64
-import io
-import json
-import math
-import os
-import random
-import re
-import shutil
-import sqlite3
-import sys
-import time
-import zipfile
-import zlib
+import argparse  # CLI parsing helpers.
+import base64  # Base64 encoding/decoding for metadata.
+import io  # In-memory byte streams for raster encoding.
+import json  # JSON read/write for configs and metadata.
+import logging  # Structured logging in place of print.
+import math  # Math utilities for contouring and scaling.
+import os  # Filesystem path handling and environment access.
+import random  # Randomized obfuscation utilities.
+import re  # Regular expressions for URL discovery.
+import shutil  # File moving and cleanup helpers.
+import sqlite3  # MBTiles storage via SQLite.
+import sys  # CLI entrypoint arguments.
+import time  # Runtime timing utilities.
+import zipfile  # ZIP archive handling for downloads.
+import zlib  # Compression helpers for vector tiles.
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -67,17 +68,23 @@ from shapely.geometry import LineString, Polygon, MultiPolygon, box, shape
 from shapely.ops import clip_by_rect
 from shapely.strtree import STRtree
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib  # Matplotlib backend selection for headless rendering.
+matplotlib.use("Agg")  # Use non-interactive backend for servers.
+import matplotlib.pyplot as plt  # Plotting utilities for raster outputs.
 
 import mapbox_vector_tile
 
-try:
-    from PIL import Image
-    PIL_OK = True
-except Exception:
-    PIL_OK = False
+try:  # Attempt optional Pillow import for PNG manipulation.
+    from PIL import Image  # Image IO for raster tiles.
+    PIL_OK = True  # Track Pillow availability.
+except Exception:  # Catch import errors or missing shared libs.
+    PIL_OK = False  # Disable Pillow-dependent features.
+
+logging.basicConfig(  # Configure root logger for consistent output.
+    level=logging.INFO,  # Default to INFO to mirror prior print behavior.
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",  # Add timestamps.
+)  # Close logging configuration call.
+logger = logging.getLogger(__name__)  # Module-level logger instance.
 
 
 # -----------------------------
@@ -182,7 +189,7 @@ CSW_GETRECORDS_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
         <ogc:And>
           <ogc:PropertyIsLike wildCard="*" singleChar="?" escapeChar="\">
             <ogc:PropertyName>AnyText</ogc:PropertyName>
-            <ogc:Literal>*EMODnet Digital Bathymetry (DTM {year}) - Tile*</ogc:Literal>
+            <ogc:Literal>{text_query}</ogc:Literal>
           </ogc:PropertyIsLike>
           <ogc:BBOX>
             <ogc:PropertyName>ows:BoundingBox</ogc:PropertyName>
@@ -198,30 +205,78 @@ CSW_GETRECORDS_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 </csw:GetRecords>
 """
 
-def csw_search_tiles(csw_url: str, bbox_lonlat: Tuple[float, float, float, float], year: int,
-                     timeout_s: int = 60, max_pages: int = 50) -> List[str]:
-    minx, miny, maxx, maxy = bbox_lonlat
-    seen, out = set(), []
-    url_re = re.compile(r"https://downloads\.emodnet-bathymetry\.eu/[^\s\"<]+?_{}\.tif\.zip".format(year))
+def csw_search_tiles(  # Discover DTM tile URLs from CSW.
+    csw_url: str,  # CSW endpoint URL.
+    bbox_lonlat: Tuple[float, float, float, float],  # Query bounding box.
+    year: int,  # Requested DTM year for filtering.
+    timeout_s: int = 60,  # HTTP timeout for CSW requests.
+    max_pages: int = 50,  # Safety cap on paging loops.
+) -> List[str]:  # Return list of candidate tile download URLs.
+    minx, miny, maxx, maxy = bbox_lonlat  # Unpack bbox coordinates.
+    seen: set[str] = set()  # Track unique URLs.
+    out: List[str] = []  # Collected output URLs.
+    url_re = re.compile(r"https?://[^\s\"<]+")  # Extract all URLs from XML.
+    text_queries = [  # Build query variants to improve robustness.
+        f"*EMODnet Digital Bathymetry (DTM {year}) - Tile*",  # Preferred title for year.
+        "*EMODnet Digital Bathymetry*Tile*",  # Fallback title without year.
+        "*EMODnet Digital Bathymetry*",  # Broad fallback if titles changed.
+    ]  # End query list.
 
-    start, max_records = 1, 50
-    headers = {"Content-Type": "application/xml"}
-    for _ in range(max_pages):
-        body = CSW_GETRECORDS_TEMPLATE.format(start=start, max_records=max_records, year=year,
-                                             minx=minx, miny=miny, maxx=maxx, maxy=maxy)
-        r = requests.post(csw_url, data=body.encode("utf-8"), headers=headers, timeout=timeout_s)
-        r.raise_for_status()
-        xml = r.text
-        found = url_re.findall(xml)
-        for u in found:
-            if u not in seen:
-                seen.add(u); out.append(u)
-        if 'nextRecord="0"' in xml or 'numberOfRecordsReturned="0"' in xml:
-            break
-        if not found and start > 1:
-            break
-        start += max_records
-    return out
+    def _is_candidate_url(url: str, require_year: bool) -> bool:  # Filter for DTM zip URLs.
+        url_lower = url.lower()  # Normalize for comparisons.
+        if not url_lower.endswith(".zip"):  # Require zip archives for download/extract.
+            return False  # Reject non-zip URLs.
+        if "emodnet-bathymetry" not in url_lower:  # Ensure EMODnet host is used.
+            return False  # Reject non-EMODnet URLs.
+        if require_year and str(year) not in url_lower:  # Enforce year tag when required.
+            return False  # Reject URLs that do not include year.
+        return True  # URL passes filters.
+
+    def _query_csw(text_query: str, require_year: bool) -> None:  # Execute one CSW query.
+        nonlocal out, seen  # Use outer-scope collections.
+        start, max_records = 1, 50  # Initialize pagination state.
+        headers = {"Content-Type": "application/xml"}  # CSW POST headers.
+        for _ in range(max_pages):  # Loop through result pages.
+            body = CSW_GETRECORDS_TEMPLATE.format(  # Fill template for request.
+                start=start,  # Current start position.
+                max_records=max_records,  # Page size.
+                text_query=text_query,  # Text search query.
+                minx=minx,  # BBOX min longitude.
+                miny=miny,  # BBOX min latitude.
+                maxx=maxx,  # BBOX max longitude.
+                maxy=maxy,  # BBOX max latitude.
+            )  # End template formatting.
+            response = requests.post(  # Execute CSW POST request.
+                csw_url,  # Endpoint URL.
+                data=body.encode("utf-8"),  # Encode XML payload.
+                headers=headers,  # Apply headers.
+                timeout=timeout_s,  # Enforce timeout.
+            )  # End request call.
+            response.raise_for_status()  # Raise on HTTP errors.
+            xml = response.text  # Store response text.
+            found_urls = url_re.findall(xml)  # Extract all URLs from XML.
+            matched = False  # Track if any URL matched filters.
+            for url in found_urls:  # Iterate candidate URLs.
+                if not _is_candidate_url(url, require_year):  # Skip non-matching URLs.
+                    continue  # Continue to next URL.
+                if url in seen:  # Avoid duplicates.
+                    continue  # Continue if already collected.
+                seen.add(url)  # Record unique URL.
+                out.append(url)  # Append to output list.
+                matched = True  # Mark that we found matches in this page.
+            if 'nextRecord="0"' in xml or 'numberOfRecordsReturned="0"' in xml:  # End paging.
+                break  # Stop paging loop.
+            if not matched and start > 1:  # Stop early if subsequent pages empty.
+                break  # Avoid unnecessary requests.
+            start += max_records  # Move to next page.
+
+    _query_csw(text_queries[0], require_year=True)  # Prefer strict year match.
+    if not out:  # Only retry if no URLs were found.
+        for fallback_query in text_queries[1:]:  # Iterate fallback queries.
+            _query_csw(fallback_query, require_year=False)  # Loosen filters.
+            if out:  # Stop once URLs are found.
+                break  # Exit fallback loop.
+    return out  # Return collected URLs.
 
 
 # -----------------------------
@@ -874,22 +929,26 @@ def run(cfg: Config) -> None:
     bbox_merc = lonlat_bbox_to_merc(cfg.bbox_lonlat)
     bbox_geom_merc = box(*bbox_merc)
 
-    print("Discovering EMODnet DTM tiles via CSW...")
-    tile_urls = csw_search_tiles(cfg.csw_url, cfg.bbox_lonlat, cfg.dtm_year)
+    logger.info("Discovering EMODnet DTM tiles via CSW...")  # Log CSW discovery start.
+    tile_urls = csw_search_tiles(cfg.csw_url, cfg.bbox_lonlat, cfg.dtm_year)  # Query tiles.
     if not tile_urls:
         raise RuntimeError("No EMODnet DTM tile URLs found. Check bbox/year/csw_url.")
-    print(f"Found {len(tile_urls)} tile downloads.")
+    logger.info("Found %s tile downloads.", len(tile_urls))  # Log number of tiles.
 
     tiles_dir = os.path.join(cfg.cache_dir, "tiles", f"dtm_{cfg.dtm_year}")
     os.makedirs(tiles_dir, exist_ok=True)
     tile_tifs: List[str] = []
     for u in tile_urls:
-        print(f"Downloading/extracting: {u}")
+        logger.info("Downloading/extracting: %s", u)  # Log download URL.
         tile_tifs.append(download_and_extract_zip(u, tiles_dir))
 
     land_tree, land_geoms = load_land_polygons(cfg, cfg.bbox_lonlat) if cfg.coast_enabled else (STRtree([]), [])
     if cfg.coast_enabled:
-        print(f"Loaded land polygons: {len(land_geoms)} (source={cfg.coast_source})")
+        logger.info(  # Log land polygon load.
+            "Loaded land polygons: %s (source=%s)",
+            len(land_geoms),
+            cfg.coast_source,
+        )
 
     vconn = mbtiles_open(cfg.output_mbtiles)
     vmd = {
@@ -954,7 +1013,7 @@ def run(cfg: Config) -> None:
     for z in range(cfg.zoom_min, cfg.zoom_max + 1):
         interval = _value_for_zoom(cfg.contour_intervals_m, z, None)
         if interval is None or interval <= 0:
-            print(f"[z={z}] skip (no contour interval configured)")
+            logger.info("[z=%s] skip (no contour interval configured)", z)  # Log skip.
             continue
 
         inter_tif = ensure_zoom_intermediate(cfg, tile_tifs, z, bbox_merc)
@@ -965,7 +1024,13 @@ def run(cfg: Config) -> None:
         drop_p = float(_value_for_zoom(cfg.ob_drop_p, z, 0.0) or 0.0)
         level_noise = float(_value_for_zoom(cfg.ob_level_noise_m, z, 0.0) or 0.0)
 
-        print(f"[z={z}] interval={interval}m inter={os.path.basename(inter_tif)} landmask={'ON' if landmask_tif else 'OFF'}")
+        logger.info(  # Log contour configuration per zoom.
+            "[z=%s] interval=%sm inter=%s landmask=%s",
+            z,
+            interval,
+            os.path.basename(inter_tif),
+            "ON" if landmask_tif else "OFF",
+        )
 
         tiles = list(tile_iter_for_bbox(cfg.bbox_lonlat, z))
         total_tiles += len(tiles)
@@ -1098,7 +1163,15 @@ def run(cfg: Config) -> None:
             mbtiles_commit(slconn)
 
     dt = time.time() - t0
-    print(f"Done. total_tiles={total_tiles}, vector={written_vec}, bathy_png={written_ras}, hillshade={written_hs}, slope={written_sl}, elapsed={dt:.1f}s")
+    logger.info(  # Log completion summary.
+        "Done. total_tiles=%s, vector=%s, bathy_png=%s, hillshade=%s, slope=%s, elapsed=%.1fs",
+        total_tiles,
+        written_vec,
+        written_ras,
+        written_hs,
+        written_sl,
+        dt,
+    )
 
     vconn.close()
     if rconn is not None:
