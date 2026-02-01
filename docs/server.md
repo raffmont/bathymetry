@@ -2,7 +2,8 @@
 
 `demo/server.py` is a tiny **read-only** tile server that reads MBTiles (SQLite) and serves tiles
 with the exact URL schema required by the MapLibre/OpenLayers demos. The server is configured
-by `demo/config.json` (or via `DEMO_CONFIG=/path/to/config.json`).
+by `demo/config.json` (or via `DEMO_CONFIG=/path/to/config.json`), and all relative paths are
+resolved relative to the config file location.
 
 ## Endpoints
 - `GET /` – demo landing page (static content)

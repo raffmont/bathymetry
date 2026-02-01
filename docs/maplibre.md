@@ -76,8 +76,11 @@ Current bathy is grayscale PNG8. You can:
 - or output RGB tiles instead (customize generator)
 
 ### C) Add labels
-You can add a symbol layer reading `depth_m` as text.
+You can add a symbol layer reading `depth_m` or `depth_label` as text.
 Note: For dense contour lines, labeling needs decluttering logic and careful filters.
+
+If you enable `"contour_labels"` in your generator config, each contour feature will include
+`depth_label` formatted with your preferred string (see [docs/obfuscate_bathy_tiles.md](obfuscate_bathy_tiles.md)).
 
 ## Troubleshooting
 - 404 on tiles: verify MBTiles paths and that you generated the zoom range you are viewing.

@@ -19,6 +19,17 @@
     "10-11": 20,
     "12-14": 10
   },
+  "contour_labels": {
+    "enabled": true,
+    "format": "{depth_m} m"
+  },
+  "contour_smoothing": {
+    "iterations_by_zoom": {
+      "7-9": 1,
+      "10-11": 1,
+      "12-14": 2
+    }
+  },
   "cache_intermediate": true,
   "coastline_mask": {
     "enabled": true,
