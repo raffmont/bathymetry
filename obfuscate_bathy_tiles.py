@@ -760,18 +760,19 @@ def ensure_landmask_zoom(cfg, z: int, inter_tif: str, bbox_merc: Tuple[float,flo
             mask = np.zeros((H, W), dtype=np.uint8)
         else:
             bbox_lonlat = cfg.bbox_lonlat
-            candidates = land_tree.query(box(*bbox_lonlat))
-            tf = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+            candidates = land_tree.query(box(*bbox_lonlat))  # Query the spatial index for possible land features.
+            tf = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)  # Prepare the lon/lat -> Web Mercator transform.
             minx, miny, maxx, maxy = bbox_merc
             shapes_3857 = []
-            for g in candidates:
-                if not bbox_intersects(g.bounds, bbox_lonlat):
-                    continue
-                gg = _transform_polygonal(g, tf)
-                gg = clip_by_rect(gg, minx, miny, maxx, maxy)
-                if gg.is_empty:
-                    continue
-                shapes_3857.append(gg)
+            for cand in candidates:  # Iterate through spatial index hits.
+                g = land_geoms[int(cand)] if isinstance(cand, (int, np.integer)) else cand  # Normalize STRtree indices to geometries.
+                if not bbox_intersects(g.bounds, bbox_lonlat):  # Skip shapes outside the lon/lat bounding box.
+                    continue  # Move to the next candidate geometry.
+                gg = _transform_polygonal(g, tf)  # Project the geometry to Web Mercator.
+                gg = clip_by_rect(gg, minx, miny, maxx, maxy)  # Clip to the raster bounds.
+                if gg.is_empty:  # Ignore geometries that vanished after clipping.
+                    continue  # Move to the next candidate geometry.
+                shapes_3857.append(gg)  # Keep the valid projected geometry.
 
             mask = rasterize(
                 [(g, 1) for g in shapes_3857],
