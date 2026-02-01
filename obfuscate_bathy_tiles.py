@@ -869,15 +869,15 @@ def merc_to_tile_coords(x: float, y: float, bounds: Tuple[float,float,float,floa
     return (max(0, min(extent, px)), max(0, min(extent, py)))
 
 def encode_mvt(layers: Dict[str, Dict[str, Any]]) -> bytes:
-    payload = {"layers": []}
-    for name, layer in layers.items():
-        payload["layers"].append({
-            "name": name,
-            "features": layer["features"],
-            "extent": layer["extent"],
-            "version": layer.get("version", 2),
-        })
-    return mapbox_vector_tile.encode(payload)
+    payload_layers: List[Dict[str, Any]] = []  # Collect per-layer payloads for the MVT encoder.
+    for name, layer in layers.items():  # Walk each logical layer keyed by name.
+        payload_layers.append({  # Append the layer payload in the format expected by mapbox_vector_tile.
+            "name": name,  # Provide the layer name required by the encoder.
+            "features": layer["features"],  # Attach the features for this layer.
+            "extent": layer["extent"],  # Preserve the vector tile extent for coordinates.
+            "version": layer.get("version", 2),  # Default to MVT version 2 when not specified.
+        })  # Close the layer payload mapping.
+    return mapbox_vector_tile.encode(payload_layers)  # Encode the list of layers into a tile blob.
 
 
 # -----------------------------
