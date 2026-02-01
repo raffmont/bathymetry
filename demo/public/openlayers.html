@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Bathymetry Demo (OpenLayers)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@10.3.1/ol.css">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .info { position: absolute; left: 12px; top: 12px; background: rgba(255,255,255,0.9); padding: 10px;
+            border-radius: 8px; font: 12px/1.3 system-ui; max-width: 380px; z-index: 10;}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="info">
+  <b>Bathymetry demo</b><br/>
+  Expects a tile server exposing:<br/>
+  <code>/tiles/vector/{z}/{x}/{y}.pbf</code> (MVT)<br/>
+  <code>/tiles/bathy/{z}/{x}/{y}.png</code> (PNG8)<br/>
+  <code>/tiles/hillshade/{z}/{x}/{y}.png</code> (PNG8)<br/>
+  Adjust URLs below if needed.
+</div>
+
+<script type="module">
+  import Map from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/Map.js';
+  import View from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/View.js';
+  import TileLayer from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/layer/Tile.js';
+  import VectorTileLayer from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/layer/VectorTile.js';
+  import OSM from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/source/OSM.js';
+  import XYZ from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/source/XYZ.js';
+  import VectorTileSource from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/source/VectorTile.js';
+  import MVT from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/format/MVT.js';
+  import Stroke from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/style/Stroke.js';
+  import Style from 'https://cdn.jsdelivr.net/npm/ol@10.3.1/style/Style.js';
+
+  const base = "http://localhost:8080/tiles";
+
+  const osm = new TileLayer({ source: new OSM() });
+  const bathy = new TileLayer({ opacity: 0.55, source: new XYZ({ url: `${base}/bathy/{z}/{x}/{y}.png`, crossOrigin: "anonymous" }) });
+  const hillshade = new TileLayer({ opacity: 0.45, source: new XYZ({ url: `${base}/hillshade/{z}/{x}/{y}.png`, crossOrigin: "anonymous" }) });
+
+  const contours = new VectorTileLayer({
+    source: new VectorTileSource({ format: new MVT(), url: `${base}/vector/{z}/{x}/{y}.pbf` }),
+    style: new Style({ stroke: new Stroke({ width: 1.0 }) })
+  });
+
+  const map = new Map({
+    target: 'map',
+    layers: [osm, bathy, hillshade, contours],
+    view: new View({ center: [1580000, 4870000], zoom: 10, projection: 'EPSG:3857' })
+  });
+</script>
+</body>
+</html>
