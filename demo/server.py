@@ -30,14 +30,14 @@ _configure_logging()  # Initialize logging for module-level startup tasks.
 
 def _config_path() -> Path:
     """Resolve the JSON config path, optionally overridden by DEMO_CONFIG."""  # Document path resolution.
-    return Path(os.environ.get("DEMO_CONFIG", "demo/config.json")).expanduser().resolve()  # Load default config.
+    return Path(os.environ.get("DEMO_CONFIG", "config.json")).expanduser().resolve()  # Load default config.
 
 
 def _load_config(path: Path) -> Dict[str, Any]:
     """Load the JSON config file and return it as a dictionary."""  # Explain function return.
     if not path.exists():  # Ensure the config file exists before reading.
-        raise FileNotFoundError(f"Demo config not found: {path}")  # Fail fast with a clear error.
-    LOGGER.info("Loading demo config from %s", path)  # Log which config file is used.
+        raise FileNotFoundError(f"Config not found: {path}")  # Fail fast with a clear error.
+    LOGGER.info("Loading config from %s", path)  # Log which config file is used.
     return json.loads(path.read_text(encoding="utf-8"))  # Parse the JSON text content.
 
 
