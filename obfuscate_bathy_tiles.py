@@ -348,22 +348,42 @@ def download_file(url: str, out_path: str, timeout_s: int = 300) -> None:
                     f.write(chunk)
 
 def download_and_extract_zip(url: str, out_dir: str, timeout_s: int = 300) -> str:
-    os.makedirs(out_dir, exist_ok=True)
-    local_zip = os.path.join(out_dir, os.path.basename(url.split("?", 1)[0]))
-    download_file(url, local_zip, timeout_s=timeout_s)
-    with zipfile.ZipFile(local_zip, "r") as z:
-        tifs = [m for m in z.namelist() if m.lower().endswith((".tif", ".tiff"))]
-        if not tifs:
-            raise RuntimeError(f"No GeoTIFF in {local_zip}")
-        member = tifs[0]
-        out_tif = os.path.join(out_dir, os.path.basename(member))
-        if not os.path.exists(out_tif):
-            z.extract(member, out_dir)
-            extracted = os.path.join(out_dir, member)
-            if extracted != out_tif:
-                os.makedirs(os.path.dirname(out_tif), exist_ok=True)
-                shutil.move(extracted, out_tif)
-        return out_tif
+    os.makedirs(out_dir, exist_ok=True)  # Ensure the output directory exists.
+    local_zip = os.path.join(out_dir, os.path.basename(url.split("?", 1)[0]))  # Build the local zip path.
+    download_file(url, local_zip, timeout_s=timeout_s)  # Download the zip archive if needed.
+    with zipfile.ZipFile(local_zip, "r") as z:  # Open the archive for inspection.
+        tifs = [m for m in z.namelist() if m.lower().endswith((".tif", ".tiff"))]  # Find GeoTIFF members.
+        if tifs:  # Handle GeoTIFF-first archives.
+            member = tifs[0]  # Select the first GeoTIFF entry.
+            out_tif = os.path.join(out_dir, os.path.basename(member))  # Build the output GeoTIFF path.
+            if not os.path.exists(out_tif):  # Extract only if missing.
+                z.extract(member, out_dir)  # Extract the member to the output directory.
+                extracted = os.path.join(out_dir, member)  # Build the extracted file path.
+                if extracted != out_tif:  # Move when nested directories are used.
+                    os.makedirs(os.path.dirname(out_tif), exist_ok=True)  # Ensure the destination folder exists.
+                    shutil.move(extracted, out_tif)  # Move the extracted file to the final location.
+            return out_tif  # Return the GeoTIFF path.
+        asc_members = [m for m in z.namelist() if m.lower().endswith(".asc")]  # Look for ASCII grid entries.
+        if not asc_members:  # Fail if neither GeoTIFF nor ASCII grid exists.
+            raise RuntimeError(f"No GeoTIFF or ASCII grid in {local_zip}")  # Surface the unsupported archive.
+        asc_member = asc_members[0]  # Select the first ASCII grid entry.
+        out_asc = os.path.join(out_dir, os.path.basename(asc_member))  # Build the output ASCII grid path.
+        if not os.path.exists(out_asc):  # Extract only if missing.
+            z.extract(asc_member, out_dir)  # Extract the ASCII grid file.
+            extracted = os.path.join(out_dir, asc_member)  # Build the extracted ASCII grid path.
+            if extracted != out_asc:  # Move when nested directories are used.
+                os.makedirs(os.path.dirname(out_asc), exist_ok=True)  # Ensure the destination folder exists.
+                shutil.move(extracted, out_asc)  # Move the extracted file to the final location.
+        out_tif = os.path.splitext(out_asc)[0] + ".tif"  # Define the converted GeoTIFF path.
+        if not os.path.exists(out_tif):  # Convert only if the GeoTIFF does not exist.
+            logger.info("Converting ASCII grid to GeoTIFF: %s", out_asc)  # Log the conversion step.
+            with rasterio.open(out_asc) as src:  # Open the ASCII grid with rasterio.
+                profile = src.profile  # Capture the source profile metadata.
+                profile.update(driver="GTiff")  # Switch the output driver to GeoTIFF.
+                with rasterio.open(out_tif, "w", **profile) as dst:  # Create the GeoTIFF dataset.
+                    for band_index in range(1, src.count + 1):  # Iterate over all bands.
+                        dst.write(src.read(band_index), band_index)  # Copy the band data.
+        return out_tif  # Return the converted GeoTIFF path.
 
 def download_and_prepare_vector_dataset(url: str, cache_dir: str) -> str:
     os.makedirs(cache_dir, exist_ok=True)
