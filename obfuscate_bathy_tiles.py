@@ -62,7 +62,8 @@ import rasterio.warp
 from pyproj import CRS, Transformer
 from rasterio.enums import Resampling
 from rasterio.features import rasterize
-from rasterio.merge import merge as rio_merge
+from rasterio.merge import merge as rio_merge  # Merge raster sources into mosaics.
+from rasterio.vrt import WarpedVRT  # Build on-the-fly reprojected raster views.
 from rasterio.transform import from_bounds
 
 import fiona
@@ -630,15 +631,30 @@ def load_land_polygons(cfg, bbox_lonlat: Tuple[float,float,float,float]) -> Tupl
 # -----------------------------
 # Per-zoom intermediate raster + landmask cache
 # -----------------------------
-def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]:
-    return [rasterio.open(p) for p in tile_tifs]
+def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]:  # Open raster sources with a shared CRS.
+    srcs: List[rasterio.DatasetReader] = []  # Accumulate dataset handles for merging.
+    target_crs = None  # Track the reference CRS for the mosaic.
+    for path in tile_tifs:  # Iterate through each tile path.
+        src = rasterio.open(path)  # Open the raster dataset from disk.
+        if src.crs is None:  # Guard against missing CRS metadata.
+            src.close()  # Close the dataset before raising.
+            raise RuntimeError(f"Missing CRS for raster tile: {path}")  # Stop with a clear error.
+        if target_crs is None:  # Capture the first available CRS as the target.
+            target_crs = src.crs  # Store the CRS to align all inputs.
+        if src.crs != target_crs:  # Detect CRS mismatches across inputs.
+            logger.warning("Reprojecting %s from %s to %s for mosaic alignment.", path, src.crs, target_crs)  # Log reprojection.
+            src = WarpedVRT(src, crs=target_crs)  # Wrap the dataset in a reprojected VRT.
+        srcs.append(src)  # Add the (possibly warped) dataset to the list.
+    if target_crs is None:  # Ensure we discovered a valid CRS.
+        raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
+    return srcs  # Return the aligned dataset readers.
 
-def close_mosaic_sources(srcs: List[rasterio.DatasetReader]) -> None:
-    for s in srcs:
-        try:
-            s.close()
-        except Exception:
-            pass
+def close_mosaic_sources(srcs: List[rasterio.DatasetReader]) -> None:  # Close dataset handles after merging.
+    for s in srcs:  # Iterate through each dataset handle.
+        try:  # Attempt to close the dataset cleanly.
+            s.close()  # Release file handles and resources.
+        except Exception:  # Swallow close failures to avoid masking upstream errors.
+            pass  # Ignore close errors in cleanup.
 
 def ensure_zoom_intermediate(cfg, tile_tifs: List[str], z: int, bbox_merc: Tuple[float,float,float,float]) -> str:
     zdir = os.path.join(cfg.cache_dir, f"z{z}")
