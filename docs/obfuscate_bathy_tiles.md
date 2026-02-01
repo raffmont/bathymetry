@@ -6,6 +6,7 @@ from EMODnet Bathymetry DTM datasets.
 ## Features
 - Automatic EMODnet DTM discovery & download
 - On-the-fly raster mosaicking (auto-reprojects mismatched CRS tiles to a common CRS)
+- CRS inference from filenames that include EPSG codes (e.g., 3857 or 4326)
 - Per-zoom raster cache
 - GeoTIFF, ASCII grid, and NetCDF/HDF5 raster ingestion
 - Multi-band rasters are ingested using the first band only
@@ -79,6 +80,28 @@ Run with config and override a few parameters without editing JSON:
 python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbox 13.95 40.60 14.35 40.90   --no-obfuscation --verbose
 ```
 Use `--verbose` to log CSW query details when troubleshooting tile discovery.
+
+### contour_labels
+Add a formatted label attribute to contour line features:
+```json
+"contour_labels": {
+  "enabled": true,
+  "format": "{depth_m} m"
+}
+```
+The formatter accepts `{depth_m}` (rounded) and `{depth_m_raw}` (unrounded) placeholders.
+
+### contour_smoothing
+Smooth contours with Chaikin subdivision iterations per zoom:
+```json
+"contour_smoothing": {
+  "iterations_by_zoom": {
+    "7-9": 1,
+    "10-11": 1,
+    "12-14": 2
+  }
+}
+```
 
 ## Documentation index
 - MapLibre: `docs/maplibre.md`

@@ -646,6 +646,18 @@ def _read_sidecar_crs(path: str) -> Optional[CRS]:  # Attempt to load CRS inform
             logger.warning("Failed to parse CRS sidecar for %s.", path)  # Log the sidecar parse failure.
     return None  # Return None when no usable CRS is found.
 
+def _infer_crs_from_filename(path: str) -> Optional[CRS]:  # Attempt to infer CRS from filename tokens.
+    basename = os.path.basename(path).lower()  # Normalize the filename for case-insensitive matching.
+    matches = re.findall(r"(?:epsg[:_])?(?P<code>\d{4,5})", basename)  # Extract EPSG-like numeric tokens.
+    for code in matches:  # Walk each potential EPSG code from the filename.
+        if code in {"3857", "4326"}:  # Limit inference to common web/geographic CRS codes.
+            try:  # Guard CRS construction against invalid inputs.
+                return CRS.from_epsg(int(code))  # Build a CRS from the EPSG code.
+            except Exception:  # Treat parsing failures as non-fatal.
+                logger.warning("Failed to infer CRS from filename %s.", path)  # Log the inference failure.
+                return None  # Return None when parsing fails.
+    return None  # Return None when no recognized CRS code is found.
+
 def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]:  # Open raster sources with a shared CRS.
     srcs: List[rasterio.DatasetReader] = []  # Accumulate dataset handles for merging.
     target_crs = None  # Track the reference CRS for the mosaic.
@@ -658,6 +670,12 @@ def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]: 
             sidecar_crs = _read_sidecar_crs(path)  # Attempt to parse a CRS from sidecar metadata.
             if sidecar_crs:  # Accept the first sidecar CRS we can parse.
                 target_crs = sidecar_crs  # Persist the sidecar CRS for alignment.
+                break  # Stop scanning after finding a usable CRS.
+        if target_crs is None:  # Only try filename inference when no CRS was found yet.
+            inferred_crs = _infer_crs_from_filename(path)  # Attempt to infer CRS from the filename.
+            if inferred_crs:  # Accept the first inferred CRS we can parse.
+                logger.info("Inferred CRS %s from filename %s.", inferred_crs, path)  # Log the inference decision.
+                target_crs = inferred_crs  # Persist the inferred CRS for alignment.
                 break  # Stop scanning after finding a usable CRS.
     if target_crs is None:  # Ensure we discovered a valid CRS before proceeding.
         raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
@@ -672,7 +690,11 @@ def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]: 
         src_crs = src.crs  # Capture the CRS from metadata when available.
         if src_crs is None:  # Guard against missing CRS metadata.
             src_crs = _read_sidecar_crs(path)  # Attempt to load CRS from a sidecar file.
-            if src_crs is None:  # Fall back to the shared CRS when sidecar metadata is missing.
+            if src_crs is None:  # Fall back to filename inference when sidecar metadata is missing.
+                src_crs = _infer_crs_from_filename(path)  # Attempt to infer CRS from the filename.
+                if src_crs:  # Log when filename-based inference succeeds.
+                    logger.info("Inferred CRS %s from filename %s.", src_crs, path)  # Emit inference info.
+            if src_crs is None:  # Fall back to the shared CRS when no metadata is available.
                 logger.warning("Missing CRS for %s; assuming %s.", path, target_crs)  # Log the CRS fallback decision.
                 src_crs = target_crs  # Assume the shared CRS when nothing else is available.
             src = WarpedVRT(src, src_crs=src_crs, crs=target_crs)  # Override the source CRS to align with the target.
@@ -860,6 +882,24 @@ def simplify_linestring(ls: LineString, tol_m: float) -> LineString:
         return ls
     return ls.simplify(tol_m, preserve_topology=False)
 
+def smooth_linestring_chaikin(ls: LineString, iterations: int) -> LineString:  # Smooth a line using Chaikin subdivision.
+    if iterations <= 0:  # Exit early when no smoothing is requested.
+        return ls  # Return the original geometry unchanged.
+    coords = list(ls.coords)  # Convert the line coordinates to a mutable list.
+    if len(coords) < 3:  # Avoid smoothing lines that do not have enough vertices.
+        return ls  # Return the original geometry for short lines.
+    for _ in range(iterations):  # Apply Chaikin smoothing repeatedly for the requested iterations.
+        new_coords: List[Tuple[float, float]] = [coords[0]]  # Preserve the first coordinate for endpoint stability.
+        for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):  # Walk each segment pair.
+            qx = 0.75 * x0 + 0.25 * x1  # Compute the first interior point on the segment.
+            qy = 0.75 * y0 + 0.25 * y1  # Compute the first interior point on the segment.
+            rx = 0.25 * x0 + 0.75 * x1  # Compute the second interior point on the segment.
+            ry = 0.25 * y0 + 0.75 * y1  # Compute the second interior point on the segment.
+            new_coords.extend([(qx, qy), (rx, ry)])  # Append the smoothed segment points.
+        new_coords.append(coords[-1])  # Preserve the last coordinate for endpoint stability.
+        coords = new_coords  # Update the working coordinate list for the next iteration.
+    return LineString(coords)  # Return the smoothed geometry as a new LineString.
+
 def merc_to_tile_coords(x: float, y: float, bounds: Tuple[float,float,float,float], extent: int) -> Tuple[int, int]:
     minx, miny, maxx, maxy = bounds
     tx = (x - minx) / (maxx - minx)
@@ -1008,6 +1048,9 @@ class Config:
     extent: int
     contour_layer_name: str
     contour_intervals_m: Dict[str, float]
+    contour_labels_enabled: bool  # Toggle depth label properties on contour features.
+    contour_label_format: str  # Format string used to render contour depth labels.
+    contour_smoothing_iters: Dict[str, int]  # Chaikin smoothing iterations per zoom range.
 
     cache_intermediate: bool
 
@@ -1067,6 +1110,8 @@ def load_config(path: str) -> Config:
 
     coast = raw.get("coastline_mask", {})
     lmc = raw.get("land_mask_cache", {})
+    contour_labels = raw.get("contour_labels", {})  # Read contour label settings.
+    contour_smoothing = raw.get("contour_smoothing", {})  # Read contour smoothing settings.
     bathy = raw.get("bathy_data", {})
     raster = bathy.get("raster_mbtiles", {})
     derived = raw.get("derived_rasters", {})
@@ -1088,6 +1133,9 @@ def load_config(path: str) -> Config:
         extent=int(raw.get("extent", 4096)),
         contour_layer_name=str(raw.get("layer_name", "bathy_contours")),
         contour_intervals_m=dict(req("contour_intervals_m")),
+        contour_labels_enabled=bool(contour_labels.get("enabled", False)),  # Enable depth label attributes when true.
+        contour_label_format=str(contour_labels.get("format", "{depth_m} m")),  # Set label format with depth_m placeholders.
+        contour_smoothing_iters=dict(contour_smoothing.get("iterations_by_zoom", {})),  # Set smoothing iterations by zoom.
 
         cache_intermediate=bool(raw.get("cache_intermediate", True)),
 
@@ -1271,17 +1319,21 @@ def run(cfg: Config) -> None:
         inter_tif = ensure_zoom_intermediate(cfg, tile_tifs, z, bbox_merc)
         landmask_tif = ensure_landmask_zoom(cfg, z, inter_tif, bbox_merc, land_tree, land_geoms)
 
-        sigma_jitter = float(_value_for_zoom(cfg.ob_jitter_m, z, 0.0) or 0.0)
-        tol_simplify = float(_value_for_zoom(cfg.ob_simplify_m, z, 0.0) or 0.0)
-        drop_p = float(_value_for_zoom(cfg.ob_drop_p, z, 0.0) or 0.0)
-        level_noise = float(_value_for_zoom(cfg.ob_level_noise_m, z, 0.0) or 0.0)
+        sigma_jitter = float(_value_for_zoom(cfg.ob_jitter_m, z, 0.0) or 0.0)  # Read per-zoom jitter magnitude.
+        tol_simplify = float(_value_for_zoom(cfg.ob_simplify_m, z, 0.0) or 0.0)  # Read per-zoom simplification tolerance.
+        drop_p = float(_value_for_zoom(cfg.ob_drop_p, z, 0.0) or 0.0)  # Read per-zoom drop probability.
+        level_noise = float(_value_for_zoom(cfg.ob_level_noise_m, z, 0.0) or 0.0)  # Read per-zoom level noise.
+        smooth_iters = int(_value_for_zoom(cfg.contour_smoothing_iters, z, 0) or 0)  # Read per-zoom smoothing iterations.
+        labels_enabled = bool(cfg.contour_labels_enabled)  # Cache the contour label toggle for this zoom.
 
         logger.info(  # Log contour configuration per zoom.
-            "[z=%s] interval=%sm inter=%s landmask=%s",
+            "[z=%s] interval=%sm inter=%s landmask=%s smooth=%s labels=%s",
             z,
             interval,
             os.path.basename(inter_tif),
             "ON" if landmask_tif else "OFF",
+            smooth_iters,
+            "ON" if labels_enabled else "OFF",
         )
 
         tiles = list(tile_iter_for_bbox(cfg.bbox_lonlat, z))
@@ -1328,20 +1380,35 @@ def run(cfg: Config) -> None:
                     for line in lines:
                         if line.length <= 0:
                             continue
-                        if cfg.ob_enabled:
+                        if cfg.ob_enabled:  # Apply obfuscation if enabled in the config.
                             if drop_p > 0 and rng.random() < drop_p:
                                 continue
                             line = add_jitter_linestring(line, sigma_jitter, rng)
                             line = simplify_linestring(line, tol_simplify)
                             if line.is_empty or len(line.coords) < 2:
                                 continue
+                        if smooth_iters > 0:  # Apply optional contour smoothing if configured.
+                            line = smooth_linestring_chaikin(line, smooth_iters)  # Smooth the line geometry.
+                            if line.is_empty or len(line.coords) < 2:  # Skip lines that collapse during smoothing.
+                                continue  # Move to the next candidate line.
                         lev2 = float(lev)
                         if cfg.ob_enabled and level_noise > 0:
                             lev2 += rng.gauss(0.0, level_noise)
 
                         geom = {"type": "LineString",
                                 "coordinates": [merc_to_tile_coords(xx, yy, tb, cfg.extent) for (xx, yy) in line.coords]}
-                        contour_features.append({"geometry": geom, "properties": {"depth_m": round(lev2, 3), "interval_m": float(interval), "z": int(z)}})
+                        props = {  # Build the MVT feature properties for the contour line.
+                            "depth_m": round(lev2, 3),  # Store the rounded contour depth in meters.
+                            "interval_m": float(interval),  # Store the contour interval for styling.
+                            "z": int(z),  # Store the zoom level for diagnostics.
+                        }
+                        if labels_enabled:  # Optionally add a formatted depth label string.
+                            try:  # Guard label formatting in case of invalid format strings.
+                                props["depth_label"] = cfg.contour_label_format.format(depth_m=round(lev2, 3), depth_m_raw=lev2)  # Format the label.
+                            except Exception:  # Fall back if the format string fails to render.
+                                logger.warning("Failed to format contour label for depth %s.", lev2)  # Log label formatting failures.
+                                props["depth_label"] = str(round(lev2, 3))  # Use a simple fallback label.
+                        contour_features.append({"geometry": geom, "properties": props})  # Store the contour feature.
 
                 bathy_feature = None
                 if cfg.bathy_enabled and cfg.bathy_output == "embedded_mvt":

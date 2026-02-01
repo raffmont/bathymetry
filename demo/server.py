@@ -41,9 +41,12 @@ def _load_config(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))  # Parse the JSON text content.
 
 
-def _resolve_path(value: str) -> Path:
-    """Resolve a config path relative to the current working directory."""  # Clarify resolution strategy.
-    return Path(value).expanduser().resolve()  # Expand and resolve to an absolute path.
+def _resolve_path(value: str, base_dir: Path) -> Path:
+    """Resolve a config path relative to the config directory."""  # Clarify resolution strategy.
+    candidate = Path(value).expanduser()  # Expand user tildes before resolving the path.
+    if candidate.is_absolute():  # Return immediately for already-absolute paths.
+        return candidate.resolve()  # Resolve the absolute path for consistency.
+    return (base_dir / candidate).resolve()  # Resolve relative paths against the config directory.
 
 
 def _get_nested(config: Dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -58,13 +61,14 @@ def _get_nested(config: Dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 _config_path_value = _config_path()  # Resolve the config path at import time.
 _config = _load_config(_config_path_value)  # Load the JSON configuration into memory.
+_config_dir = _config_path_value.parent  # Anchor relative paths to the config file location.
 
-VECTOR_MBTILES = _resolve_path(_get_nested(_config, "tiles", "vector_mbtiles", default="./data/output/bathy_contours.mbtiles"))  # Vector MBTiles path.
-BATHY_MBTILES = _resolve_path(_get_nested(_config, "tiles", "bathy_mbtiles", default="./data/output/bathy_raster.mbtiles"))  # Bathy raster MBTiles path.
-HS_MBTILES = _resolve_path(_get_nested(_config, "tiles", "hillshade_mbtiles", default="./data/output/bathy_hillshade.mbtiles"))  # Hillshade MBTiles path.
-SLOPE_MBTILES = _resolve_path(_get_nested(_config, "tiles", "slope_mbtiles", default="./data/output/bathy_slope.mbtiles"))  # Slope MBTiles path.
-TILEJSON_DIR = _resolve_path(_get_nested(_config, "tiles", "tilejson_dir", default="./data/output/tilejson"))  # TileJSON output directory.
-PUBLIC_DIR = _resolve_path(_get_nested(_config, "public_dir", default="./demo/public"))  # Directory holding demo assets.
+VECTOR_MBTILES = _resolve_path(_get_nested(_config, "tiles", "vector_mbtiles", default="./data/output/bathy_contours.mbtiles"), _config_dir)  # Vector MBTiles path.
+BATHY_MBTILES = _resolve_path(_get_nested(_config, "tiles", "bathy_mbtiles", default="./data/output/bathy_raster.mbtiles"), _config_dir)  # Bathy raster MBTiles path.
+HS_MBTILES = _resolve_path(_get_nested(_config, "tiles", "hillshade_mbtiles", default="./data/output/bathy_hillshade.mbtiles"), _config_dir)  # Hillshade MBTiles path.
+SLOPE_MBTILES = _resolve_path(_get_nested(_config, "tiles", "slope_mbtiles", default="./data/output/bathy_slope.mbtiles"), _config_dir)  # Slope MBTiles path.
+TILEJSON_DIR = _resolve_path(_get_nested(_config, "tiles", "tilejson_dir", default="./data/output/tilejson"), _config_dir)  # TileJSON output directory.
+PUBLIC_DIR = _resolve_path(_get_nested(_config, "public_dir", default="./demo/public"), _config_dir)  # Directory holding demo assets.
 
 APP = FastAPI(title="Bathymetry MBTiles Server", version="0.2.0")  # Instantiate the FastAPI application.
 
