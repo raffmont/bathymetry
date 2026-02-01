@@ -1,0 +1,53 @@
+{
+  "dtm_year": 2024,
+  "csw_url": "https://emodnet.ec.europa.eu/geonetwork/emodnet/eng/csw",
+
+  "output_mbtiles": "./out/bathy.mbtiles",
+  "cache_dir": "./cache",
+
+  "bbox_lonlat": [13.90, 40.55, 14.45, 40.95],
+  "zoom_min": 7,
+  "zoom_max": 14,
+
+  "tile_pixels": 512,
+  "extent": 4096,
+  "layer_name": "bathy_contours",
+
+  "contour_intervals_m": {
+    "7-9": 50,
+    "10-11": 20,
+    "12-14": 10
+  },
+
+  "cache_intermediate": true,
+
+  "coastline_mask": {
+    "enabled": true,
+    "source": "osm_land_polygons",
+    "osm_land_polygons_url": "https://osmdata.openstreetmap.de/data/land-polygons-split-4326.zip",
+    "max_features": null
+  },
+
+  "bathy_data": {
+    "enabled": true,
+    "mode": "mvt_grid_i16",
+    "layer_name": "bathy_data",
+    "grid_size": 32,
+    "quantization_m": 0.1
+  },
+
+  "obfuscation": {
+    "enabled": true,
+    "seed": 20260201,
+    "jitter_m_by_zoom": { "7-9": 120, "10-11": 40, "12-14": 12 },
+    "simplify_m_by_zoom": { "7-9": 80, "10-11": 25, "12-14": 8 },
+    "drop_probability_by_zoom": { "7-9": 0.15, "10-11": 0.08, "12-14": 0.03 },
+    "level_noise_m_by_zoom": { "7-9": 8, "10-11": 4, "12-14": 2 }
+  },
+
+  "mbtiles_metadata": {
+    "name": "Bathymetry contours (EMODnet-derived)",
+    "description": "Contour tiles generated from EMODnet Bathymetry DTM tiles; land-masked and optionally obfuscated.",
+    "attribution": "Derived from EMODnet Bathymetry DTM (CC BY 4.0)."
+  }
+}
