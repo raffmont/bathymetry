@@ -179,6 +179,12 @@ def meters_per_pixel_equator(z: int, tile_size: int = 256) -> float:
 def zoom_target_resolution_m(z: int, tile_pixels: int, tile_size: int = 256) -> float:
     return meters_per_pixel_equator(z, tile_size=tile_size) * (tile_size / tile_pixels)
 
+def zoom_from_resolution_m(res_m: float, tile_pixels: int, tile_size: int = 256) -> int:  # Convert a resolution to a zoom.
+    world = 2 * WEBMERC_MAX  # Compute the full Web Mercator world size in meters.
+    denom = max(tile_pixels, 1)  # Guard against zero tile pixel inputs.
+    zoom = math.log2(world / (denom * res_m))  # Solve for zoom that matches the target resolution.
+    return int(math.floor(zoom))  # Floor to the nearest lower integer zoom level.
+
 
 # -----------------------------
 # EMODnet CSW discovery
@@ -658,27 +664,93 @@ def _infer_crs_from_filename(path: str) -> Optional[CRS]:  # Attempt to infer CR
                 return None  # Return None when parsing fails.
     return None  # Return None when no recognized CRS code is found.
 
+def _resolve_target_crs(tile_tifs: List[str]) -> CRS:  # Determine a shared CRS from the input tiles.
+    for path in tile_tifs:  # Iterate over input tiles to find CRS metadata.
+        with rasterio.open(path) as preview:  # Open each dataset in read-only preview mode.
+            if preview.crs:  # Prefer embedded CRS metadata when present.
+                return preview.crs  # Return the first CRS found in the inputs.
+        sidecar_crs = _read_sidecar_crs(path)  # Try to parse CRS from sidecar files.
+        if sidecar_crs:  # Accept sidecar CRS when available.
+            return sidecar_crs  # Return the sidecar-derived CRS.
+        inferred_crs = _infer_crs_from_filename(path)  # Attempt filename-based CRS inference.
+        if inferred_crs:  # Use the inferred CRS if it parses cleanly.
+            logger.info("Inferred CRS %s from filename %s.", inferred_crs, path)  # Log the inference decision.
+            return inferred_crs  # Return the inferred CRS.
+    raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail when no CRS is discoverable.
+
+def _resolve_source_crs(path: str, src: rasterio.DatasetReader, target_crs: CRS) -> CRS:  # Resolve per-source CRS.
+    src_crs = src.crs  # Start with the CRS declared in the dataset.
+    if src_crs is None:  # Fall back when no CRS is embedded in the dataset.
+        src_crs = _read_sidecar_crs(path)  # Attempt to read CRS from a sidecar file.
+        if src_crs is None:  # Attempt filename inference if sidecar metadata is missing.
+            src_crs = _infer_crs_from_filename(path)  # Try to infer the CRS from the filename.
+            if src_crs:  # Log successful filename-based inference.
+                logger.info("Inferred CRS %s from filename %s.", src_crs, path)  # Emit a helpful log line.
+        if src_crs is None:  # As a final fallback, assume the target CRS.
+            logger.warning("Missing CRS for %s; assuming %s.", path, target_crs)  # Warn about the fallback.
+            src_crs = target_crs  # Use the shared target CRS as the default.
+    return src_crs  # Return the resolved CRS for this dataset.
+
+def _estimate_tile_resolution_m(path: str, target_crs: CRS) -> Optional[float]:  # Estimate tile resolution in meters.
+    with rasterio.open(path) as src:  # Open the raster dataset to inspect metadata.
+        src_crs = _resolve_source_crs(path, src, target_crs)  # Resolve the CRS for this dataset.
+        try:  # Guard reprojection calculations against failures.
+            bounds_merc = rasterio.warp.transform_bounds(  # Transform bounds into Web Mercator.
+                src_crs,  # Source CRS for the raster dataset.
+                "EPSG:3857",  # Destination CRS for Web Mercator meters.
+                *src.bounds,  # Expand the source bounds tuple into arguments.
+                densify_pts=21,  # Densify bounds to improve accuracy on curved projections.
+            )
+        except Exception:  # Handle reprojection failures gracefully.
+            logger.warning("Failed to transform bounds to EPSG:3857 for %s.", path)  # Log the reprojection issue.
+            return None  # Return None when bounds reprojection fails.
+        width = max(src.width, 1)  # Guard against divide-by-zero when width is invalid.
+        height = max(src.height, 1)  # Guard against divide-by-zero when height is invalid.
+        res_x = abs(bounds_merc[2] - bounds_merc[0]) / width  # Compute meters-per-pixel in X.
+        res_y = abs(bounds_merc[3] - bounds_merc[1]) / height  # Compute meters-per-pixel in Y.
+        res = max(res_x, res_y)  # Use the coarser of the two axes.
+        if not math.isfinite(res) or res <= 0:  # Validate the computed resolution.
+            return None  # Signal invalid resolution values.
+        return res  # Return the estimated meters-per-pixel resolution.
+
+def _min_resolution_m(tile_tifs: List[str], target_crs: CRS) -> Optional[float]:  # Compute the finest resolution.
+    best = None  # Track the smallest meters-per-pixel observed.
+    for path in tile_tifs:  # Iterate through each raster tile path.
+        res = _estimate_tile_resolution_m(path, target_crs)  # Estimate meters-per-pixel for this tile.
+        if res is None:  # Skip tiles that failed resolution estimation.
+            continue  # Move on to the next tile.
+        best = res if best is None else min(best, res)  # Keep the smallest resolution seen so far.
+    return best  # Return the minimum resolution, if any.
+
+def _union_bounds_merc(tile_tifs: List[str], target_crs: CRS) -> Optional[Tuple[float, float, float, float]]:  # Union bounds in EPSG:3857.
+    union_bounds = None  # Initialize the union bounds accumulator.
+    for path in tile_tifs:  # Iterate through raster tiles to build coverage bounds.
+        with rasterio.open(path) as src:  # Open the raster dataset for bounds inspection.
+            src_crs = _resolve_source_crs(path, src, target_crs)  # Resolve the CRS for this dataset.
+            try:  # Guard bounds reprojection against failures.
+                bounds_merc = rasterio.warp.transform_bounds(  # Reproject bounds to Web Mercator.
+                    src_crs,  # Source CRS for the dataset bounds.
+                    "EPSG:3857",  # Destination CRS for Web Mercator.
+                    *src.bounds,  # Expand source bounds into positional arguments.
+                    densify_pts=21,  # Densify bounds to handle curved reprojections.
+                )
+            except Exception:  # Handle failed bounds reprojection gracefully.
+                logger.warning("Failed to transform bounds to EPSG:3857 for %s.", path)  # Log the reprojection failure.
+                continue  # Skip this tile when bounds cannot be transformed.
+        if union_bounds is None:  # Initialize the union with the first bounds.
+            union_bounds = bounds_merc  # Start the union bounds.
+        else:  # Expand the union bounds with this tile's extent.
+            union_bounds = (  # Build the updated bounds tuple.
+                min(union_bounds[0], bounds_merc[0]),  # Update minimum X.
+                min(union_bounds[1], bounds_merc[1]),  # Update minimum Y.
+                max(union_bounds[2], bounds_merc[2]),  # Update maximum X.
+                max(union_bounds[3], bounds_merc[3]),  # Update maximum Y.
+            )
+    return union_bounds  # Return the union bounds if any tiles were processed.
+
 def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]:  # Open raster sources with a shared CRS.
     srcs: List[rasterio.DatasetReader] = []  # Accumulate dataset handles for merging.
-    target_crs = None  # Track the reference CRS for the mosaic.
-    for path in tile_tifs:  # Iterate through each tile path to determine a reference CRS.
-        with rasterio.open(path) as preview:  # Open the raster dataset in preview mode.
-            if preview.crs:  # Use the embedded CRS when present.
-                target_crs = preview.crs  # Record the first valid CRS for alignment.
-                break  # Stop scanning once the target CRS is identified.
-        if target_crs is None:  # Only try sidecars when no CRS was found yet.
-            sidecar_crs = _read_sidecar_crs(path)  # Attempt to parse a CRS from sidecar metadata.
-            if sidecar_crs:  # Accept the first sidecar CRS we can parse.
-                target_crs = sidecar_crs  # Persist the sidecar CRS for alignment.
-                break  # Stop scanning after finding a usable CRS.
-        if target_crs is None:  # Only try filename inference when no CRS was found yet.
-            inferred_crs = _infer_crs_from_filename(path)  # Attempt to infer CRS from the filename.
-            if inferred_crs:  # Accept the first inferred CRS we can parse.
-                logger.info("Inferred CRS %s from filename %s.", inferred_crs, path)  # Log the inference decision.
-                target_crs = inferred_crs  # Persist the inferred CRS for alignment.
-                break  # Stop scanning after finding a usable CRS.
-    if target_crs is None:  # Ensure we discovered a valid CRS before proceeding.
-        raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
+    target_crs = _resolve_target_crs(tile_tifs)  # Resolve the shared target CRS for all inputs.
     for path in tile_tifs:  # Iterate through each tile path to open datasets.
         src = rasterio.open(path)  # Open the raster dataset from disk.
         if src.count > 1:  # Detect multi-band rasters that could break merge assumptions.
@@ -687,16 +759,8 @@ def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]: 
                 path,  # Include the dataset path in the warning.
                 src.count,  # Report the number of detected bands.
             )
-        src_crs = src.crs  # Capture the CRS from metadata when available.
-        if src_crs is None:  # Guard against missing CRS metadata.
-            src_crs = _read_sidecar_crs(path)  # Attempt to load CRS from a sidecar file.
-            if src_crs is None:  # Fall back to filename inference when sidecar metadata is missing.
-                src_crs = _infer_crs_from_filename(path)  # Attempt to infer CRS from the filename.
-                if src_crs:  # Log when filename-based inference succeeds.
-                    logger.info("Inferred CRS %s from filename %s.", src_crs, path)  # Emit inference info.
-            if src_crs is None:  # Fall back to the shared CRS when no metadata is available.
-                logger.warning("Missing CRS for %s; assuming %s.", path, target_crs)  # Log the CRS fallback decision.
-                src_crs = target_crs  # Assume the shared CRS when nothing else is available.
+        src_crs = _resolve_source_crs(path, src, target_crs)  # Resolve the dataset CRS with fallbacks.
+        if src.crs is None:  # Treat missing CRS as a need to override and align.
             src = WarpedVRT(src, src_crs=src_crs, crs=target_crs)  # Override the source CRS to align with the target.
         elif src_crs != target_crs:  # Detect CRS mismatches across inputs.
             logger.warning("Reprojecting %s from %s to %s for mosaic alignment.", path, src_crs, target_crs)  # Log reprojection.
@@ -1042,7 +1106,7 @@ class Config:
 
     bbox_lonlat: Tuple[float, float, float, float]
     zoom_min: int
-    zoom_max: int
+    zoom_max: Optional[int]  # Allow zoom_max to be computed from source resolution when omitted.
 
     tile_pixels: int
     extent: int
@@ -1126,8 +1190,8 @@ def load_config(path: str) -> Config:
         cache_dir=str(raw.get("cache_dir", "./cache")),
 
         bbox_lonlat=tuple(req("bbox_lonlat")),
-        zoom_min=int(req("zoom_min")),
-        zoom_max=int(req("zoom_max")),
+        zoom_min=int(raw.get("zoom_min", 0)),  # Default to zoom 0 when zoom_min is unspecified.
+        zoom_max=(int(raw["zoom_max"]) if "zoom_max" in raw and raw["zoom_max"] is not None else None),  # Preserve zoom_max or defer.
 
         tile_pixels=int(raw.get("tile_pixels", 512)),
         extent=int(raw.get("extent", 4096)),
@@ -1241,6 +1305,26 @@ def run(cfg: Config) -> None:
         tile_path = download_and_prepare_raster(u, tiles_dir)  # Download and prepare raster content if present.
         if tile_path is not None:  # Only keep raster outputs.
             tile_tifs.append(tile_path)  # Store the tile path for later mosaicking.
+    if not tile_tifs:  # Guard against missing raster data after download/prepare.
+        raise RuntimeError("No usable raster tiles were downloaded for the requested DTM.")  # Fail fast when inputs are empty.
+
+    target_crs = _resolve_target_crs(tile_tifs)  # Resolve the shared CRS for georeference checks.
+    coverage_merc = _union_bounds_merc(tile_tifs, target_crs)  # Compute coverage bounds in Web Mercator.
+    if coverage_merc is not None:  # Log coverage bounds when available.
+        logger.info("Raster coverage EPSG:3857 bounds=%s", coverage_merc)  # Emit coverage bounds for diagnostics.
+    if coverage_merc is not None and not bbox_intersects(coverage_merc, bbox_merc):  # Check for overlap with requested bbox.
+        logger.warning(  # Warn about likely CRS or georeference mismatch.
+            "Raster coverage in EPSG:3857 does not overlap requested bbox; check CRS/georeferencing for OSM alignment."
+        )
+    if cfg.zoom_max is None:  # Compute zoom_max when it is not provided in the config.
+        min_res_m = _min_resolution_m(tile_tifs, target_crs)  # Estimate the finest DTM resolution in meters.
+        if min_res_m is None:  # Handle missing resolution estimates.
+            logger.warning("Unable to estimate DTM resolution; defaulting zoom_max to zoom_min.")  # Log fallback behavior.
+            cfg.zoom_max = cfg.zoom_min  # Fall back to a single zoom level when resolution is unknown.
+        else:  # Compute zoom_max from the estimated resolution.
+            computed_zoom = max(cfg.zoom_min, zoom_from_resolution_m(min_res_m, cfg.tile_pixels))  # Compute zoom ceiling.
+            cfg.zoom_max = computed_zoom  # Store the computed zoom_max in the config.
+            logger.info("Computed zoom_max=%s from DTM resolution %.3f m.", cfg.zoom_max, min_res_m)  # Log zoom decision.
 
     land_tree, land_geoms = load_land_polygons(cfg, cfg.bbox_lonlat) if cfg.coast_enabled else (STRtree([]), [])
     if cfg.coast_enabled:

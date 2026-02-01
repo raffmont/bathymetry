@@ -51,8 +51,10 @@ The page expects these endpoints:
 - `/tiles/bathy/{z}/{x}/{y}.png`
 - `/tiles/hillshade/{z}/{x}/{y}.png`
 - `/tiles/slope/{z}/{x}/{y}.png`
+- `/tilejson/bathy_contours.tilejson` (optional, used to auto-fit the view)
 
 ## Troubleshooting
 - 404 on tiles: verify MBTiles paths and that you generated the zoom range you are viewing.
 - No bathy/hillshade overlay: those MBTiles are optional; if missing you’ll see 404s (safe to ignore).
 - CORS issues: `demo/server.py` enables CORS for `*`.
+- Map does not zoom to your data: ensure TileJSON files exist under `data/output/tilejson` and are served by `/tilejson`.
