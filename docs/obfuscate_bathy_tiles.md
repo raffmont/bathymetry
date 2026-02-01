@@ -15,10 +15,10 @@ from EMODnet Bathymetry DTM datasets.
 - Ready-to-use FastAPI demo server
 
 See:
-- docs/maplibre_demo.md
-- docs/openlayers_demo.md
-- docs/fastapi_server.md
-- docs/signalk_charts.md
+- [docs/maplibre_demo.md](maplibre_demo.md)
+- [docs/openlayers_demo.md](openlayers_demo.md)
+- [docs/fastapi_server.md](fastapi_server.md)
+- [docs/signalk_charts.md](signalk_charts.md)
 
 ---
 
@@ -74,8 +74,9 @@ Write TileJSON files (recommended):
 ### CLI overrides
 Run with config and override a few parameters without editing JSON:
 ```bash
-python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbox 13.95 40.60 14.35 40.90   --no-obfuscation
+python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbox 13.95 40.60 14.35 40.90   --no-obfuscation --verbose
 ```
+Use `--verbose` to log CSW query details when troubleshooting tile discovery.
 
 ## Documentation index
 - MapLibre: `docs/maplibre_demo.md`

@@ -1,6 +1,6 @@
 {
   "dtm_year": 2024,
-  "csw_url": "https://emodnet.ec.europa.eu/geonetwork/emodnet/eng/csw",
+  "csw_url": "https://emodnet.ec.europa.eu/geonetwork/srv/eng/csw",
   "output_mbtiles": ".data/output/bathy_contours_emodnet_coast.mbtiles",
   "cache_dir": "./data/cache",
   "bbox_lonlat": [
