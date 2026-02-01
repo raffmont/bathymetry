@@ -5,7 +5,7 @@ from EMODnet Bathymetry DTM datasets.
 
 ## Features
 - Automatic EMODnet DTM discovery & download
-- On-the-fly raster mosaicking
+- On-the-fly raster mosaicking (auto-reprojects mismatched CRS tiles to a common CRS)
 - Per-zoom raster cache
 - GeoTIFF, ASCII grid, and NetCDF/HDF5 raster ingestion
 - Coastline masking (OSM or EMODnet)
