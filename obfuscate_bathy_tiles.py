@@ -808,33 +808,43 @@ def compute_contour_levels(data: np.ndarray, interval_m: float, nodata_mask: np.
 
 def contours_from_array(grid: np.ndarray, extent_merc: Tuple[float,float,float,float], levels: List[float],
                         nodata_mask: np.ndarray) -> List[Tuple[float, LineString]]:
-    if not levels:
-        return []
-    g = grid.copy()
-    g[nodata_mask] = np.nan
-    minx, miny, maxx, maxy = extent_merc
-    h, w = g.shape
-    xs = np.linspace(minx, maxx, w)
-    ys = np.linspace(miny, maxy, h)
-    fig = plt.figure(figsize=(1, 1), dpi=72)
-    ax = fig.add_subplot(111)
-    ax.set_axis_off()
+    if not levels:  # Exit early when no contour levels were requested.
+        return []  # Return an empty list because there is nothing to compute.
+    g = grid.copy()  # Copy the grid so we can mask nodata without mutating callers.
+    g[nodata_mask] = np.nan  # Replace nodata values with NaNs so contour skips them.
+    minx, miny, maxx, maxy = extent_merc  # Unpack the raster bounds in Web Mercator.
+    h, w = g.shape  # Capture grid dimensions for building coordinate axes.
+    xs = np.linspace(minx, maxx, w)  # Build x-coordinates that align with grid columns.
+    ys = np.linspace(miny, maxy, h)  # Build y-coordinates that align with grid rows.
+    fig = plt.figure(figsize=(1, 1), dpi=72)  # Create a tiny figure for contour extraction only.
+    ax = fig.add_subplot(111)  # Create an axes to host the contour plot.
+    ax.set_axis_off()  # Disable axes rendering to avoid extra work and artifacts.
     try:
-        cs = ax.contour(xs, ys, g, levels=levels, linewidths=1)
+        cs = ax.contour(xs, ys, g, levels=levels, linewidths=1)  # Generate contour lines.
     except Exception:
-        plt.close(fig)
-        return []
-    out: List[Tuple[float, LineString]] = []
-    for lev, coll in zip(cs.levels, cs.collections):
-        for path in coll.get_paths():
-            v = path.vertices
-            if v.shape[0] < 2:
-                continue
-            ls = LineString(v)
-            if ls.length > 0:
-                out.append((float(lev), ls))
-    plt.close(fig)
-    return out
+        plt.close(fig)  # Ensure the figure is closed on failure to free resources.
+        return []  # Return no contours when Matplotlib fails to compute them.
+    out: List[Tuple[float, LineString]] = []  # Collect contour levels with geometry output.
+    collections = getattr(cs, "collections", None)  # Prefer the older Matplotlib collections API.
+    if collections is None:  # Handle newer Matplotlib where collections is removed.
+        for lev, segments in zip(cs.levels, cs.allsegs):  # Iterate levels with raw segment arrays.
+            for seg in segments:  # Each segment is an Nx2 array of vertices.
+                if len(seg) < 2:  # Skip degenerate segments without enough points.
+                    continue  # Move to the next segment.
+                ls = LineString(seg)  # Convert the segment into a Shapely LineString.
+                if ls.length > 0:  # Ensure the line has positive length.
+                    out.append((float(lev), ls))  # Store the level with its geometry.
+    else:
+        for lev, coll in zip(cs.levels, collections):  # Iterate levels and their artist collections.
+            for path in coll.get_paths():  # Extract contour paths from the collection.
+                v = path.vertices  # Grab the vertices for the contour path.
+                if v.shape[0] < 2:  # Skip paths that are too short to form a line.
+                    continue  # Move to the next contour path.
+                ls = LineString(v)  # Convert the path vertices into a LineString.
+                if ls.length > 0:  # Only keep geometries with positive length.
+                    out.append((float(lev), ls))  # Store the level with its geometry.
+    plt.close(fig)  # Close the figure to free memory after contour extraction.
+    return out  # Return the list of contours for downstream processing.
 
 def add_jitter_linestring(ls: LineString, sigma_m: float, rng: random.Random) -> LineString:
     if sigma_m <= 0:
