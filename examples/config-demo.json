@@ -80,7 +80,7 @@
     "out_dir": "./data/output/tilejson"
   },
   "obfuscation": {
-    "enabled": true,
+    "enabled": false,
     "seed": 20260201,
     "jitter_m_by_zoom": {
       "7-9": 120,
