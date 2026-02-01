@@ -34,14 +34,15 @@ pip install -r demo/requirements.txt
 python demo/server.py
 ```
 Then open:
-- `demo/maplibre.html`
-- `demo/openlayers.html`
+- `http://127.0.0.1:8080/maplibre.html`
+- `http://127.0.0.1:8080/openlayers.html`
 
 ## Documentation
 - Generator documentation: [docs/obfuscate_bathy_tiles.md](docs/obfuscate_bathy_tiles.md)
-- MapLibre demo: [docs/maplibre_demo.md](docs/maplibre_demo.md)
-- OpenLayers demo: [docs/openlayers_demo.md](docs/openlayers_demo.md)
-- FastAPI server: [docs/fastapi_server.md](docs/fastapi_server.md)
+- MapLibre demo: [docs/maplibre.md](docs/maplibre.md)
+- OpenLayers demo: [docs/openlayers.md](docs/openlayers.md)
+- Demo overview: [docs/demo.md](docs/demo.md)
+- FastAPI server: [docs/server.md](docs/server.md)
 - Signal K integration: [docs/signalk_charts.md](docs/signalk_charts.md)
 
 ## Notes

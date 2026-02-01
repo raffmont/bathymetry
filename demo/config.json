@@ -1,0 +1,15 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "reload": true
+  },
+  "public_dir": "./demo/public",
+  "tiles": {
+    "vector_mbtiles": "./data/output/bathy_contours.mbtiles",
+    "bathy_mbtiles": "./data/output/bathy_raster.mbtiles",
+    "hillshade_mbtiles": "./data/output/bathy_hillshade.mbtiles",
+    "slope_mbtiles": "./data/output/bathy_slope.mbtiles",
+    "tilejson_dir": "./data/output/tilejson"
+  }
+}

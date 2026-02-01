@@ -17,9 +17,9 @@ from EMODnet Bathymetry DTM datasets.
 - Ready-to-use FastAPI demo server
 
 See:
-- [docs/maplibre_demo.md](maplibre_demo.md)
-- [docs/openlayers_demo.md](openlayers_demo.md)
-- [docs/fastapi_server.md](fastapi_server.md)
+- [docs/maplibre.md](maplibre.md)
+- [docs/openlayers.md](openlayers.md)
+- [docs/server.md](server.md)
 - [docs/signalk_charts.md](signalk_charts.md)
 
 ---
@@ -39,8 +39,8 @@ python demo/server.py
 ```
 
 Then open:
-- `demo/maplibre.html`
-- `demo/openlayers.html`
+- `http://127.0.0.1:8080/maplibre.html`
+- `http://127.0.0.1:8080/openlayers.html`
 
 ### Tile endpoints exposed
 - `/tiles/vector/{z}/{x}/{y}.pbf`
@@ -81,7 +81,7 @@ python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbo
 Use `--verbose` to log CSW query details when troubleshooting tile discovery.
 
 ## Documentation index
-- MapLibre: `docs/maplibre_demo.md`
-- OpenLayers: `docs/openlayers_demo.md`
-- Server: `docs/fastapi_server.md`
+- MapLibre: `docs/maplibre.md`
+- OpenLayers: `docs/openlayers.md`
+- Server: `docs/server.md`
 - Signal K usage: `docs/signalk_charts.md`

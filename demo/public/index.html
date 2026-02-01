@@ -1,7 +1,49 @@
-<html>
-  <head></head>
-  <body>
-    <a href="maplibre.html">maplibre Demo</a><br/>
-    <a href="openlayers.html">Openlayers Demo</a><br/>
-  </body>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bathymetry Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { margin: 0; font: 15px/1.6 system-ui; background: #f6f7f9; color: #1f2a37; }
+    main { max-width: 760px; margin: 32px auto; padding: 24px; background: #fff; border-radius: 14px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08); }
+    h1 { margin-top: 0; }
+    ul { padding-left: 20px; }
+    .callout { background: #eef4ff; padding: 12px 16px; border-radius: 10px; }
+    a { color: #1d4ed8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Bathymetry demo</h1>
+  <p>
+    This project turns EMODnet bathymetry DTM tiles into vector contours and raster overlays
+    (bathymetry, hillshade, slope). The demo server serves those outputs as MBTiles and
+    exposes a simple UI to preview them.
+  </p>
+
+  <div class="callout">
+    <p><strong>Quick start</strong></p>
+    <ol>
+      <li>Generate tiles using <code>config.json</code> or <code>examples/config-demo.json</code>.</li>
+      <li>Run <code>python demo/server.py</code> (uses <code>demo/config.json</code>).</li>
+      <li>Pick a visualization below.</li>
+    </ol>
+  </div>
+
+  <h2>Choose a viewer</h2>
+  <ul>
+    <li><a href="maplibre.html">MapLibre viewer</a> — vector + raster overlay selection.</li>
+    <li><a href="openlayers.html">OpenLayers viewer</a> — vector + raster overlay selection.</li>
+  </ul>
+
+  <h2>What the demo shows</h2>
+  <ul>
+    <li>Vector contour lines (MVT)</li>
+    <li>Raster bathymetry tiles (PNG8)</li>
+    <li>Derived hillshade and slope overlays (PNG8)</li>
+  </ul>
+</main>
+</body>
 </html>
