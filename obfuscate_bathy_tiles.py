@@ -631,22 +631,49 @@ def load_land_polygons(cfg, bbox_lonlat: Tuple[float,float,float,float]) -> Tupl
 # -----------------------------
 # Per-zoom intermediate raster + landmask cache
 # -----------------------------
+def _read_sidecar_crs(path: str) -> Optional[CRS]:  # Attempt to load CRS information from sidecar files.
+    base, _ = os.path.splitext(path)  # Split the path to build sidecar filenames.
+    for ext in (".prj", ".wkt"):  # Look for common CRS sidecar extensions.
+        sidecar = f"{base}{ext}"  # Build the sidecar path.
+        if not os.path.exists(sidecar):  # Skip when the sidecar is missing.
+            continue  # Move to the next extension.
+        try:  # Guard sidecar parsing with error handling.
+            with open(sidecar, "r", encoding="utf-8") as f:  # Open the CRS sidecar file.
+                wkt = f.read().strip()  # Read the WKT string from disk.
+            if wkt:  # Ensure we have content before parsing.
+                return CRS.from_wkt(wkt)  # Parse WKT into a rasterio CRS.
+        except Exception:  # Treat any parsing errors as non-fatal.
+            logger.warning("Failed to parse CRS sidecar for %s.", path)  # Log the sidecar parse failure.
+    return None  # Return None when no usable CRS is found.
+
 def build_mosaic_sources(tile_tifs: List[str]) -> List[rasterio.DatasetReader]:  # Open raster sources with a shared CRS.
     srcs: List[rasterio.DatasetReader] = []  # Accumulate dataset handles for merging.
     target_crs = None  # Track the reference CRS for the mosaic.
-    for path in tile_tifs:  # Iterate through each tile path.
+    for path in tile_tifs:  # Iterate through each tile path to determine a reference CRS.
+        with rasterio.open(path) as preview:  # Open the raster dataset in preview mode.
+            if preview.crs:  # Use the embedded CRS when present.
+                target_crs = preview.crs  # Record the first valid CRS for alignment.
+                break  # Stop scanning once the target CRS is identified.
+        if target_crs is None:  # Only try sidecars when no CRS was found yet.
+            sidecar_crs = _read_sidecar_crs(path)  # Attempt to parse a CRS from sidecar metadata.
+            if sidecar_crs:  # Accept the first sidecar CRS we can parse.
+                target_crs = sidecar_crs  # Persist the sidecar CRS for alignment.
+                break  # Stop scanning after finding a usable CRS.
+    if target_crs is None:  # Ensure we discovered a valid CRS before proceeding.
+        raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
+    for path in tile_tifs:  # Iterate through each tile path to open datasets.
         src = rasterio.open(path)  # Open the raster dataset from disk.
-        if src.crs is None:  # Guard against missing CRS metadata.
-            src.close()  # Close the dataset before raising.
-            raise RuntimeError(f"Missing CRS for raster tile: {path}")  # Stop with a clear error.
-        if target_crs is None:  # Capture the first available CRS as the target.
-            target_crs = src.crs  # Store the CRS to align all inputs.
-        if src.crs != target_crs:  # Detect CRS mismatches across inputs.
-            logger.warning("Reprojecting %s from %s to %s for mosaic alignment.", path, src.crs, target_crs)  # Log reprojection.
+        src_crs = src.crs  # Capture the CRS from metadata when available.
+        if src_crs is None:  # Guard against missing CRS metadata.
+            src_crs = _read_sidecar_crs(path)  # Attempt to load CRS from a sidecar file.
+            if src_crs is None:  # Fall back to the shared CRS when sidecar metadata is missing.
+                logger.warning("Missing CRS for %s; assuming %s.", path, target_crs)  # Log the CRS fallback decision.
+                src_crs = target_crs  # Assume the shared CRS when nothing else is available.
+            src = WarpedVRT(src, src_crs=src_crs, crs=target_crs)  # Override the source CRS to align with the target.
+        elif src_crs != target_crs:  # Detect CRS mismatches across inputs.
+            logger.warning("Reprojecting %s from %s to %s for mosaic alignment.", path, src_crs, target_crs)  # Log reprojection.
             src = WarpedVRT(src, crs=target_crs)  # Wrap the dataset in a reprojected VRT.
         srcs.append(src)  # Add the (possibly warped) dataset to the list.
-    if target_crs is None:  # Ensure we discovered a valid CRS.
-        raise RuntimeError("Unable to determine a target CRS from input tiles.")  # Fail with a clear diagnostic.
     return srcs  # Return the aligned dataset readers.
 
 def close_mosaic_sources(srcs: List[rasterio.DatasetReader]) -> None:  # Close dataset handles after merging.
