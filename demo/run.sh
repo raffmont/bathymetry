@@ -33,9 +33,10 @@ echo "Hillshade raster: http://127.0.0.1:${SERVER_PORT}/tiles/hillshade/{z}/{x}/
 echo "Slope raster:     http://127.0.0.1:${SERVER_PORT}/tiles/slope/{z}/{x}/{y}.png"
 echo "Health:           http://127.0.0.1:${SERVER_PORT}/health"
 echo ""
-echo "Open these files in your browser:"
-echo "  demo/maplibre.html"
-echo "  demo/openlayers.html"
+echo "Open these pages in your browser:"
+echo "  http://127.0.0.1:${SERVER_PORT}/"
+echo "  http://127.0.0.1:${SERVER_PORT}/maplibre.html"
+echo "  http://127.0.0.1:${SERVER_PORT}/openlayers.html"
 echo "-----------------------------------------"
 
 export HOST=127.0.0.1

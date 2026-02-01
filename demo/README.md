@@ -1,6 +1,6 @@
 # Demo (MapLibre + OpenLayers)
 
-These HTML files are static demos that assume you are serving your MBTiles through a tile server.
+These HTML files are static demos served by the FastAPI tile server.
 
 ## Expected endpoints
 
@@ -16,7 +16,16 @@ Derived rasters (PNG8):
 
 ## TileJSON
 The generator writes TileJSON files to `./data/output/tilejson/` (configurable via `tilejson.out_dir`).
-Serve them as static files if you like.
+Serve them from the demo server at `/tilejson/{name}`.
 
 ## Serving tiles
-Use any MBTiles-capable server (custom FastAPI/Flask, Tegola, Martin, TileServer-GL, etc.).
+Use the FastAPI demo server:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r demo/requirements.txt
+python demo/server.py
+```
+
+The server reads `demo/config.json` for MBTiles locations and serves the static demo UI from
+`demo/public/`.
