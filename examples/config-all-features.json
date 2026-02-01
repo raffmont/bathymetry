@@ -56,7 +56,7 @@
   "derived_rasters": {
     "enabled": true,
     "hillshade_mbtiles": "./data/output/bathy_hillshade.mbtiles",
-    "slope_mbtiles": "./out/bathy_slope.mbtiles",
+    "slope_mbtiles": "./data/output/bathy_slope.mbtiles",
     "tile_size": 256,
     "hillshade": {
       "azimuth_deg": 315.0,

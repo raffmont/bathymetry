@@ -32,7 +32,7 @@ Install and run:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r demo/requirements-demo.txt
+pip install -r demo/requirements.txt
 python demo/server.py
 ```
 
@@ -54,8 +54,8 @@ Enable hillshade & slope MBTiles:
 ```json
 "derived_rasters": {
   "enabled": true,
-  "hillshade_mbtiles": "./out/bathy_hillshade.mbtiles",
-  "slope_mbtiles": "./out/bathy_slope.mbtiles",
+  "hillshade_mbtiles": "./data/output/bathy_hillshade.mbtiles",
+  "slope_mbtiles": "./data/output/bathy_slope.mbtiles",
   "tile_size": 256,
   "hillshade": { "azimuth_deg": 315.0, "altitude_deg": 45.0 }
 }
@@ -67,14 +67,14 @@ Write TileJSON files (recommended):
 "tilejson": {
   "enabled": true,
   "base_url": "http://localhost:8080/tiles",
-  "out_dir": "./out/tilejson"
+  "out_dir": "./data/output/tilejson"
 }
 ```
 
 ### CLI overrides
 Run with config and override a few parameters without editing JSON:
 ```bash
-python obfuscate_bathy_tiles.py config.all_features.json   --zoom-min 8 --zoom-max 13   --bbox 13.95 40.60 14.35 40.90   --no-obfuscation
+python obfuscate_bathy_tiles.py config.json   --zoom-min 8 --zoom-max 13   --bbox 13.95 40.60 14.35 40.90   --no-obfuscation
 ```
 
 ## Documentation index

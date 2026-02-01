@@ -819,7 +819,7 @@ def load_config(path: str) -> Config:
 
         tilejson_enabled=bool(tilejson.get("enabled", True)),
         tilejson_base_url=str(tilejson.get("base_url", "http://localhost:8080/tiles")),
-        tilejson_out_dir=str(tilejson.get("out_dir", "./out/tilejson")),
+        tilejson_out_dir=str(tilejson.get("out_dir", "./data/output/tilejson")),
 
         ob_enabled=bool(ob.get("enabled", True)),
         ob_seed=int(ob.get("seed", 12345)),

@@ -23,7 +23,7 @@ source "$VENV_DIR/bin/activate"
 
 echo "[3/4] Installing demo dependencies"
 pip install --upgrade pip >/dev/null
-pip install -r demo/requirements-demo.txt
+pip install -r demo/requirements.txt
 
 echo "[4/4] Starting FastAPI tile server"
 echo "-----------------------------------------"

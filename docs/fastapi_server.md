@@ -15,7 +15,7 @@ with the exact URL schema required by the MapLibre/OpenLayers demos.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r demo/requirements-demo.txt
+pip install -r demo/requirements.txt
 python demo/server.py
 ```
 
@@ -31,11 +31,11 @@ HOST=0.0.0.0 PORT=8080 python demo/server.py
 ## Configure MBTiles paths
 Set any of:
 ```bash
-export BATHY_VECTOR_MBTILES=./out/bathy_contours.mbtiles
-export BATHY_RASTER_MBTILES=./out/bathy_raster.mbtiles
-export BATHY_HILLSHADE_MBTILES=./out/bathy_hillshade.mbtiles
-export BATHY_SLOPE_MBTILES=./out/bathy_slope.mbtiles
-export TILEJSON_DIR=./out/tilejson
+export BATHY_VECTOR_MBTILES=./data/output/bathy_contours.mbtiles
+export BATHY_RASTER_MBTILES=./data/output/bathy_raster.mbtiles
+export BATHY_HILLSHADE_MBTILES=./data/output/bathy_hillshade.mbtiles
+export BATHY_SLOPE_MBTILES=./data/output/bathy_slope.mbtiles
+export TILEJSON_DIR=./data/output/tilejson
 ```
 
 ## Implementation notes
