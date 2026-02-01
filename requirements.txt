@@ -20,3 +20,8 @@ mapbox-vector-tile>=2.0.1
 
 # Optional (only needed if bathy_data.mode == "mvt_png")
 Pillow>=10.2
+
+# For the demo only
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
